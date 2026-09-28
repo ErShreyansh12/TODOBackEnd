@@ -159,6 +159,7 @@ async function updateStaffStatus(staffId, status) {
 }
 
 module.exports = {
+  formatStaffResponse,
   createStaff,
   getStaffList,
   getStaffByStaffId,

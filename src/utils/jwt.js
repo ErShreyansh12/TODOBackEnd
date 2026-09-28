@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const env = require('../config/env');
 
@@ -9,4 +10,9 @@ function verifyToken(token) {
   return jwt.verify(token, env.jwtSecret);
 }
 
-module.exports = { generateToken, verifyToken };
+// Revoked tokens are stored as a hash so a database leak never exposes a usable token.
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+module.exports = { generateToken, verifyToken, hashToken };

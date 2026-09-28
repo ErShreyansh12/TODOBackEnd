@@ -5,4 +5,9 @@ const loginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
-module.exports = { loginSchema };
+const staffLoginSchema = Joi.object({
+  staffId: Joi.string().trim().uppercase().required(),
+  password: Joi.string().required(),
+});
+
+module.exports = { loginSchema, staffLoginSchema };

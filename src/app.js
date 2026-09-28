@@ -6,6 +6,7 @@ const swaggerUi = require('swagger-ui-express');
 const env = require('./config/env');
 const logger = require('./config/logger');
 const swaggerSpec = require('./config/swagger');
+const { UPLOAD_ROOT } = require('./config/uploads');
 const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/error.middleware');
 
@@ -22,6 +23,15 @@ app.use(
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
+
+// Attachments are public to anyone holding the (random, unguessable) URL - accepted for now.
+app.use(
+  '/uploads',
+  express.static(UPLOAD_ROOT, {
+    index: false,
+    setHeaders: (res) => res.set('Cross-Origin-Resource-Policy', 'cross-origin'),
+  })
+);
 
 app.use('/api/v1', routes);
 

@@ -223,12 +223,19 @@ function applyDisplayStatusFilter(filter, status, now) {
   }
 }
 
-async function getTasksForAdmin({ search, status, page, limit, skip }) {
+async function getTasksForAdmin({ search, status, page, limit, skip, actorId, actorRole }) {
   if (status && !Object.values(TaskDisplayStatus).includes(status)) {
     throw validationError(`"status" must be one of ${Object.values(TaskDisplayStatus).join(', ')}.`);
   }
 
   const filter = { deleted_at: null };
+
+  // A staff caller only ever sees their own tasks — same isolation rule already
+  // applied to status updates and notes. Admin is unrestricted (sees everyone's).
+  if (actorRole === Roles.STAFF) {
+    filter.assignee_type = AssigneeType.STAFF;
+    filter.assignee_id = actorId;
+  }
 
   if (search) {
     filter.title = { $regex: escapeRegex(search), $options: 'i' };

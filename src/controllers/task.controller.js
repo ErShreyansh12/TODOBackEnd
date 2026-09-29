@@ -22,7 +22,15 @@ async function getAdminTasks(req, res, next) {
   try {
     const { search, status } = req.query;
     const { page, limit, skip } = parsePagination(req.query);
-    const { tasks, pagination } = await taskService.getTasksForAdmin({ search, status, page, limit, skip });
+    const { tasks, pagination } = await taskService.getTasksForAdmin({
+      search,
+      status,
+      page,
+      limit,
+      skip,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+    });
 
     return sendSuccess(res, {
       statusCode: 200,

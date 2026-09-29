@@ -93,10 +93,10 @@ router.post(
  *   get:
  *     tags:
  *       - Tasks
- *     summary: Get the task list (admin only)
+ *     summary: Get the task list
  *     description: |
- *       Returns every task in the system — both tasks assigned to an admin and tasks assigned to staff members —
- *       not just tasks the caller created.
+ *       Admin sees every task in the system — both tasks assigned to an admin and tasks assigned to staff
+ *       members, not just tasks the caller created. A staff caller only sees tasks assigned to themselves.
  *
  *       Without a `status` filter, the list defaults to a working window: every open task (todo/in_progress/delayed,
  *       regardless of age) plus tasks completed in the last 7 days. Older completed history is reachable by
@@ -152,12 +152,6 @@ router.post(
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
- *       403:
- *         description: Logged-in user is not an admin.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *       422:
  *         description: Invalid status value.
  *         content:
@@ -165,7 +159,7 @@ router.post(
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/', authenticate, requireRole(Roles.ADMIN), taskController.getAdminTasks);
+router.get('/', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskController.getAdminTasks);
 
 /**
  * @openapi

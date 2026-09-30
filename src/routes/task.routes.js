@@ -173,6 +173,9 @@ router.get('/', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskControl
  *       computed from the due date, matching the SRS rule that staff must not be able to mark a task delayed
  *       themselves).
  *
+ *       Setting status to completed records completionAt (now) on both the task and its series. Moving away
+ *       from completed back to todo/in_progress clears completionAt on both again.
+ *
  *       Admin can change the status of any task. A staff member can only change the status of a task assigned
  *       to them - a task assigned to someone else (or a non-existent one) returns 404, the same response either
  *       way, so a staff token can't be used to probe which task IDs exist.

@@ -126,6 +126,13 @@ const options = {
             dueDate: { type: 'string', example: '2026-09-29', description: 'Deadline date in Asia/Kolkata' },
             time: { type: 'string', example: '10:00', description: 'Deadline time in Asia/Kolkata' },
             dueAt: { type: 'string', format: 'date-time', description: 'Deadline as a UTC timestamp' },
+            completionAt: {
+              type: 'string',
+              format: 'date-time',
+              nullable: true,
+              example: null,
+              description: 'When this task was marked completed; null if it is not currently completed',
+            },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
             deletedAt: { type: 'string', format: 'date-time', nullable: true, example: null },

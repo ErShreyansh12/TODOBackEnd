@@ -21,6 +21,7 @@ const taskSeriesSchema = new mongoose.Schema(
     monthly_day: { type: Number, default: null },
     last_due_date: { type: Date, required: true },
     ended_at: { type: Date, default: null },
+    completion_at: { type: Date, default: null },
     deleted_at: { type: Date, default: null },
   },
   {

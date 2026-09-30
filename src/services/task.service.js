@@ -85,6 +85,7 @@ function formatTaskResponse(task, assigneeName) {
     dueDate,
     time,
     dueAt: task.due_date,
+    completionAt: task.completion_at || null,
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     deletedAt: task.deleted_at || null,
@@ -103,6 +104,9 @@ function buildOccurrenceData(series, dueDate, status) {
     assignee_id: series.assignee_id,
     priority: series.priority,
     status,
+    // Matches updateTaskStatus's rule: completion_at is always set exactly when status is
+    // completed, including a task created with "Completed" as its initial status.
+    completion_at: status === TaskStatus.COMPLETED ? new Date() : null,
     timeline: series.timeline,
     due_date: dueDate,
     custom_dates: series.custom_dates,
@@ -283,8 +287,19 @@ async function updateTaskStatus({ taskId, status, actorId, actorRole }) {
     throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
   }
 
+  // Cleared, not just left alone, when moving away from completed - completion_at must always
+  // reflect the current status, including when a completed task is reopened.
+  const completionAt = status === TaskStatus.COMPLETED ? new Date() : null;
+
   task.status = status;
+  task.completion_at = completionAt;
   await task.save();
+
+  if (task.series_id) {
+    // Mirrors onto the series so "when was this recurring task last completed" is a single-field
+    // read there, without having to query its occurrences.
+    await TaskSeries.updateOne({ _id: task.series_id }, { $set: { completion_at: completionAt } });
+  }
 
   const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
   return formatTaskResponse(task, assigneeName);

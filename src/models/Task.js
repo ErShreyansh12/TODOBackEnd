@@ -21,6 +21,7 @@ const taskSchema = new mongoose.Schema(
     delay_reason: { type: String, default: null },
     delay_reason_added_at: { type: Date, default: null },
     series_id: { type: mongoose.Schema.Types.ObjectId, ref: 'TaskSeries', default: null },
+    completion_at: { type: Date, default: null },
     deleted_at: { type: Date, default: null },
   },
   {

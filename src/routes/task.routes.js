@@ -16,11 +16,15 @@ const router = express.Router();
  *   post:
  *     tags:
  *       - Tasks
- *     summary: Create a task (admin only)
+ *     summary: Create a task
  *     description: |
- *       Creates a task and assigns it to a staff member or an admin. The task repeats according to its timeline:
- *       the first deadline is stored now, and a background job creates each following occurrence automatically
- *       after the previous deadline passes, until the task is deleted (or, for custom dates, the last date passes).
+ *       Creates a task and assigns it to a staff member or an admin. Admin can assign to anyone. A staff
+ *       caller can only create a task assigned to themselves (assigneeType must be "staff" and assigneeId
+ *       must be their own id) - attempting to assign to someone else returns a 422, not a silent override.
+ *
+ *       The task repeats according to its timeline: the first deadline is stored now, and a background job
+ *       creates each following occurrence automatically after the previous deadline passes, until the task
+ *       is deleted (or, for custom dates, the last date passes).
  *
  *       The time is interpreted in the server time zone (Asia/Kolkata) and stored in UTC.
  *       The attachment is optional (pdf, doc, docx, xls, xlsx, png, jpg; max 5 MB). Send `multipart/form-data`
@@ -64,14 +68,8 @@ const router = express.Router();
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
- *       403:
- *         description: Logged-in user is not an admin.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *       422:
- *         description: Validation error (bad fields, unknown/inactive assignee, past custom dates, bad or oversized attachment).
+ *         description: Validation error (bad fields, unknown/inactive assignee, a staff caller assigning to someone else, past custom dates, bad or oversized attachment).
  *         content:
  *           application/json:
  *             schema:
@@ -80,7 +78,7 @@ const router = express.Router();
 router.post(
   '/',
   authenticate,
-  requireRole(Roles.ADMIN),
+  requireRole(Roles.ADMIN, Roles.STAFF),
   uploadTaskAttachment,
   normalizeCustomDates,
   validate(createTaskSchema),

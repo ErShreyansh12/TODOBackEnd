@@ -102,6 +102,7 @@ const options = {
             attachmentUrl: { type: 'string', nullable: true, example: '/uploads/tasks/0b1c...e9.pdf' },
             broker: { type: 'string', nullable: true },
             createdBy: { type: 'string', example: '6aa4036fac73e628c27d3554' },
+            createdByType: { type: 'string', enum: ['admin', 'staff'], example: 'admin' },
             assignee: {
               type: 'object',
               properties: {
@@ -132,6 +133,30 @@ const options = {
               nullable: true,
               example: null,
               description: 'When this task was marked completed; null if it is not currently completed',
+            },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            deletedAt: { type: 'string', format: 'date-time', nullable: true, example: null },
+          },
+        },
+        NoticeRecord: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: '6aae1234ab56cd78ef901234' },
+            title: { type: 'string', example: 'Office Closed — Holiday Notice' },
+            message: { type: 'string', nullable: true },
+            createdBy: { type: 'string', example: '6aa4036fac73e628c27d3554' },
+            status: { type: 'string', enum: ['active', 'inactive'], example: 'active' },
+            recipients: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  staffId: { type: 'string', example: 'EMP-001' },
+                  name: { type: 'string', example: 'Priya Nair' },
+                },
+              },
             },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },

@@ -76,6 +76,7 @@ function formatTaskResponse(task, assigneeName) {
     attachmentUrl: task.attachment_url || null,
     broker: task.broker || null,
     createdBy: task.created_by,
+    createdByType: task.created_by_type,
     assignee: { type: task.assignee_type, id: task.assignee_id, name: assigneeName },
     priority: task.priority,
     status: task.status,
@@ -100,6 +101,7 @@ function buildOccurrenceData(series, dueDate, status) {
     attachment_url: series.attachment_url,
     broker: series.broker,
     created_by: series.created_by,
+    created_by_type: series.created_by_type,
     assignee_type: series.assignee_type,
     assignee_id: series.assignee_id,
     priority: series.priority,
@@ -131,10 +133,20 @@ function prepareCustomDates(customDates, timeOfDay, now) {
   return dates;
 }
 
-async function createTask({ adminId, data, attachmentUrl }) {
+async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
   const now = new Date();
   const timezone = env.appTimezone;
   const isCustom = data.timeline === TaskTimeline.CUSTOM;
+
+  if (creatorType === AssigneeType.STAFF) {
+    const isSelfAssigned = data.assigneeType === AssigneeType.STAFF && String(data.assigneeId) === String(creatorId);
+
+    if (!isSelfAssigned) {
+      // Checked before resolveAssignee's DB lookup: the problem here is who it's assigned to,
+      // not whether that assignee exists, so this gives a clearer message regardless.
+      throw validationError('Staff can only create tasks assigned to themselves.');
+    }
+  }
 
   const assignee = await resolveAssignee(data.assigneeType, data.assigneeId);
 
@@ -159,7 +171,8 @@ async function createTask({ adminId, data, attachmentUrl }) {
     description: data.description || null,
     attachment_url: attachmentUrl,
     broker: data.broker || null,
-    created_by: adminId,
+    created_by: creatorId,
+    created_by_type: creatorType,
     assignee_type: assignee.type,
     assignee_id: assignee.id,
     priority: data.priority,

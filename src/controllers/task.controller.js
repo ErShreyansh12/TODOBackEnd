@@ -2,11 +2,22 @@ const taskService = require('../services/task.service');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 const { TASK_UPLOAD_URL_PREFIX } = require('../config/uploads');
+const Roles = require('../constants/roles');
+const AssigneeType = require('../constants/assigneeType');
+
+function resolveCreatorType(role) {
+  return role === Roles.ADMIN ? AssigneeType.ADMIN : AssigneeType.STAFF;
+}
 
 async function createTask(req, res, next) {
   try {
     const attachmentUrl = req.file ? `${TASK_UPLOAD_URL_PREFIX}/${req.file.filename}` : null;
-    const task = await taskService.createTask({ adminId: req.user.id, data: req.body, attachmentUrl });
+    const task = await taskService.createTask({
+      creatorId: req.user.id,
+      creatorType: resolveCreatorType(req.user.role),
+      data: req.body,
+      attachmentUrl,
+    });
 
     return sendSuccess(res, {
       statusCode: 201,

@@ -76,6 +76,7 @@ function formatTaskResponse(task, assigneeName) {
     attachmentUrl: task.attachment_url || null,
     broker: task.broker || null,
     createdBy: task.created_by,
+    createdByType: task.created_by_type,
     assignee: { type: task.assignee_type, id: task.assignee_id, name: assigneeName },
     priority: task.priority,
     status: task.status,
@@ -85,6 +86,7 @@ function formatTaskResponse(task, assigneeName) {
     dueDate,
     time,
     dueAt: task.due_date,
+    completionAt: task.completion_at || null,
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     deletedAt: task.deleted_at || null,
@@ -99,10 +101,14 @@ function buildOccurrenceData(series, dueDate, status) {
     attachment_url: series.attachment_url,
     broker: series.broker,
     created_by: series.created_by,
+    created_by_type: series.created_by_type,
     assignee_type: series.assignee_type,
     assignee_id: series.assignee_id,
     priority: series.priority,
     status,
+    // Matches updateTaskStatus's rule: completion_at is always set exactly when status is
+    // completed, including a task created with "Completed" as its initial status.
+    completion_at: status === TaskStatus.COMPLETED ? new Date() : null,
     timeline: series.timeline,
     due_date: dueDate,
     custom_dates: series.custom_dates,
@@ -127,10 +133,20 @@ function prepareCustomDates(customDates, timeOfDay, now) {
   return dates;
 }
 
-async function createTask({ adminId, data, attachmentUrl }) {
+async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
   const now = new Date();
   const timezone = env.appTimezone;
   const isCustom = data.timeline === TaskTimeline.CUSTOM;
+
+  if (creatorType === AssigneeType.STAFF) {
+    const isSelfAssigned = data.assigneeType === AssigneeType.STAFF && String(data.assigneeId) === String(creatorId);
+
+    if (!isSelfAssigned) {
+      // Checked before resolveAssignee's DB lookup: the problem here is who it's assigned to,
+      // not whether that assignee exists, so this gives a clearer message regardless.
+      throw validationError('Staff can only create tasks assigned to themselves.');
+    }
+  }
 
   const assignee = await resolveAssignee(data.assigneeType, data.assigneeId);
 
@@ -155,7 +171,8 @@ async function createTask({ adminId, data, attachmentUrl }) {
     description: data.description || null,
     attachment_url: attachmentUrl,
     broker: data.broker || null,
-    created_by: adminId,
+    created_by: creatorId,
+    created_by_type: creatorType,
     assignee_type: assignee.type,
     assignee_id: assignee.id,
     priority: data.priority,
@@ -283,8 +300,19 @@ async function updateTaskStatus({ taskId, status, actorId, actorRole }) {
     throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
   }
 
+  // Cleared, not just left alone, when moving away from completed - completion_at must always
+  // reflect the current status, including when a completed task is reopened.
+  const completionAt = status === TaskStatus.COMPLETED ? new Date() : null;
+
   task.status = status;
+  task.completion_at = completionAt;
   await task.save();
+
+  if (task.series_id) {
+    // Mirrors onto the series so "when was this recurring task last completed" is a single-field
+    // read there, without having to query its occurrences.
+    await TaskSeries.updateOne({ _id: task.series_id }, { $set: { completion_at: completionAt } });
+  }
 
   const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
   return formatTaskResponse(task, assigneeName);

@@ -54,7 +54,11 @@ async function processSeries(series, now) {
   }
 
   // If we crash between the two writes, the next run recomputes the same date, hits the unique index above, and catches up.
-  await TaskSeries.updateOne({ _id: series._id, last_due_date: series.last_due_date }, { $set: { last_due_date: next } });
+  // completion_at is reset here too: it mirrors the newly-created (uncompleted) occurrence, not the one it replaced.
+  await TaskSeries.updateOne(
+    { _id: series._id, last_due_date: series.last_due_date },
+    { $set: { last_due_date: next, completion_at: null } }
+  );
 }
 
 async function runRecurringTaskJob(now = new Date()) {

@@ -10,7 +10,9 @@ const taskSeriesSchema = new mongoose.Schema(
     description: { type: String, default: null },
     attachment_url: { type: String, default: null },
     broker: { type: String, default: null },
-    created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: true },
+    // No `ref`: this can point at either Admin or Staff, same as assignee_id - see created_by_type.
+    created_by: { type: mongoose.Schema.Types.ObjectId, required: true },
+    created_by_type: { type: String, enum: Object.values(AssigneeType), required: true },
     assignee_type: { type: String, enum: Object.values(AssigneeType), required: true },
     assignee_id: { type: mongoose.Schema.Types.ObjectId, required: true },
     priority: { type: String, enum: Object.values(TaskPriority), required: true },
@@ -21,6 +23,7 @@ const taskSeriesSchema = new mongoose.Schema(
     monthly_day: { type: Number, default: null },
     last_due_date: { type: Date, required: true },
     ended_at: { type: Date, default: null },
+    completion_at: { type: Date, default: null },
     deleted_at: { type: Date, default: null },
   },
   {

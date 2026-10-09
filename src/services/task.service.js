@@ -16,6 +16,7 @@ const TaskDisplayStatus = require('../constants/taskDisplayStatus');
 const ErrorCodes = require('../constants/errorCodes');
 const AppError = require('../utils/AppError');
 const { buildPaginationMeta } = require('../utils/pagination');
+const { resolveDueDateRange } = require('../utils/dueDateRange');
 const {
   nextOccurrence,
   isValidCalendarDate,
@@ -217,7 +218,7 @@ async function attachAssigneeNames(tasks) {
   return tasks.map((task) => formatTaskResponse(task, nameById.get(String(task.assignee_id)) || null));
 }
 
-function applyDisplayStatusFilter(filter, status, now) {
+function applyDisplayStatusFilter(filter, status, now, hasDateRange) {
   if (status === TaskDisplayStatus.COMPLETED) {
     filter.status = TaskStatus.COMPLETED;
   } else if (status === TaskDisplayStatus.DELAYED) {
@@ -229,8 +230,10 @@ function applyDisplayStatusFilter(filter, status, now) {
   } else if (status === TaskDisplayStatus.IN_PROGRESS) {
     filter.status = TaskStatus.IN_PROGRESS;
     filter.$or = [{ due_date: null }, { due_date: { $gte: now } }];
-  } else {
+  } else if (!hasDateRange) {
     // Default window: anything still open (any age) plus completed tasks from the last few days.
+    // Skipped when the caller asked for a date range: the range itself is then the window, and it must
+    // include completed tasks of any age (e.g. "last week").
     // There's no dedicated "completed_at" field, so updated_at is used as when it was marked completed.
     const recentCutoff = new Date(now.getTime() - RECENT_COMPLETED_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     filter.$or = [
@@ -240,35 +243,98 @@ function applyDisplayStatusFilter(filter, status, now) {
   }
 }
 
-async function getTasksForAdmin({ search, status, page, limit, skip, actorId, actorRole }) {
+async function getTasksForAdmin({
+  search,
+  status,
+  range,
+  from,
+  to,
+  assigneeType,
+  assigneeId,
+  page,
+  limit,
+  skip,
+  actorId,
+  actorRole,
+}) {
   if (status && !Object.values(TaskDisplayStatus).includes(status)) {
     throw validationError(`"status" must be one of ${Object.values(TaskDisplayStatus).join(', ')}.`);
   }
 
-  const filter = { deleted_at: null };
-
-  // A staff caller only ever sees their own tasks — same isolation rule already
-  // applied to status updates and notes. Admin is unrestricted (sees everyone's).
-  if (actorRole === Roles.STAFF) {
-    filter.assignee_type = AssigneeType.STAFF;
-    filter.assignee_id = actorId;
+  if (assigneeType && !Object.values(AssigneeType).includes(assigneeType)) {
+    throw validationError(`"assigneeType" must be one of ${Object.values(AssigneeType).join(', ')}.`);
   }
+
+  if (assigneeId && !mongoose.Types.ObjectId.isValid(assigneeId)) {
+    throw validationError('"assigneeId" is not a valid id.');
+  }
+
+  if (!range && (from || to)) {
+    throw validationError('"from" and "to" can only be used with range=custom.');
+  }
+
+  const dateRange = range ? resolveDueDateRange({ range, from, to }, env.appTimezone) : null;
+
+  const filter = { deleted_at: null };
 
   if (search) {
     filter.title = { $regex: escapeRegex(search), $options: 'i' };
   }
 
-  applyDisplayStatusFilter(filter, status, new Date());
+  applyDisplayStatusFilter(filter, status, new Date(), Boolean(dateRange));
 
-  const [tasks, total] = await Promise.all([
-    Task.find(filter).sort({ due_date: 1 }).skip(skip).limit(limit),
-    Task.countDocuments(filter),
+  if (dateRange) {
+    // In $and so it combines with the due_date condition the "delayed" status filter already sets.
+    filter.$and = [{ due_date: { $gte: dateRange.start, $lt: dateRange.end } }];
+  }
+
+  if (assigneeId) {
+    filter.assignee_id = assigneeId;
+  }
+
+  // A staff caller only ever sees their own tasks — same isolation rule already applied to status updates
+  // and notes. Set last, so nothing in the query string can widen it. Admin is unrestricted (sees everyone's).
+  if (actorRole === Roles.STAFF) {
+    filter.assignee_type = AssigneeType.STAFF;
+    filter.assignee_id = actorId;
+  }
+
+  // The "My tasks / Staff tasks" split is applied to the list only: the counts below cover both sides.
+  const listFilter = actorRole === Roles.ADMIN && assigneeType ? { ...filter, assignee_type: assigneeType } : filter;
+
+  const isAdmin = actorRole === Roles.ADMIN;
+  // _id breaks ties between tasks due at the same minute, so paging through them is stable.
+  const [tasks, total, adminCount, staffCount] = await Promise.all([
+    Task.find(listFilter).sort({ due_date: 1, _id: 1 }).skip(skip).limit(limit),
+    Task.countDocuments(listFilter),
+    isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.ADMIN }) : null,
+    isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.STAFF }) : null,
   ]);
 
   return {
     tasks: await attachAssigneeNames(tasks),
     pagination: buildPaginationMeta({ page, limit, total }),
+    range: dateRange && { range: dateRange.range, from: dateRange.from, to: dateRange.to },
+    counts: isAdmin ? { all: adminCount + staffCount, admin: adminCount, staff: staffCount } : null,
   };
+}
+
+async function getTaskById({ taskId, actorId, actorRole }) {
+  if (!mongoose.Types.ObjectId.isValid(taskId)) {
+    throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  const task = await Task.findOne({ _id: taskId, deleted_at: null });
+
+  // Same isolation rule as the list: a staff member never learns that someone else's task exists.
+  const isOwnStaffTask = task && task.assignee_type === AssigneeType.STAFF && String(task.assignee_id) === String(actorId);
+
+  if (!task || (actorRole === Roles.STAFF && !isOwnStaffTask)) {
+    throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
+  return formatTaskResponse(task, assigneeName);
 }
 
 async function getAssigneeName(assigneeType, assigneeId) {
@@ -444,6 +510,7 @@ async function deleteTask(taskId) {
 module.exports = {
   createTask,
   getTasksForAdmin,
+  getTaskById,
   updateTask,
   updateTaskStatus,
   deleteTask,

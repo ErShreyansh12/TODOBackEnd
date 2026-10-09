@@ -104,9 +104,50 @@ router.post(
  *       `status` accepts `delayed` in addition to the three stored statuses — a task is delayed when its due
  *       date has passed and it isn't completed yet; this is computed, not stored, same as `displayStatus` on
  *       each returned task.
+ *
+ *       `range` limits the list to tasks whose due date falls in a window of whole calendar days (server time
+ *       zone, Asia/Kolkata). When it is used, the default working window above is not applied: the range is
+ *       the window, so completed tasks of any age inside it are included. `status` and `search` still narrow
+ *       the result. The response carries the resolved `range` ({ range, from, to }, inclusive YYYY-MM-DD).
+ *       - `yesterday_to_tomorrow`: yesterday, today and tomorrow.
+ *       - `this_week` / `last_week`: Monday to Sunday of the current / previous week.
+ *       - `custom`: `from` and `to` are required (inclusive); at most 30 days.
+ *
+ *       Results are paged with `page` and `limit` (max 100). For an admin caller the response also has `counts`
+ *       ({ all, admin, staff }): how many tasks match the search/status/date range/assigneeId filters on each
+ *       side, ignoring `assigneeType` so the "My tasks / Staff tasks" tabs can show both numbers at once.
  *     security:
  *       - bearerAuth: []
  *     parameters:
+ *       - in: query
+ *         name: range
+ *         schema:
+ *           type: string
+ *           enum: [yesterday_to_tomorrow, this_week, last_week, custom]
+ *         description: Omit for the default working-window view.
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           example: 2026-10-01
+ *         description: First day (YYYY-MM-DD). Only with range=custom.
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           example: 2026-10-30
+ *         description: Last day (YYYY-MM-DD), on or after from and at most 30 days from it. Only with range=custom.
+ *       - in: query
+ *         name: assigneeType
+ *         schema:
+ *           type: string
+ *           enum: [admin, staff]
+ *         description: Admin only - limit the list to tasks assigned to an admin ("My tasks") or to staff. Ignored for a staff caller.
+ *       - in: query
+ *         name: assigneeId
+ *         schema:
+ *           type: string
+ *         description: Limit the list to one assignee. Ignored for a staff caller, who only ever sees their own tasks.
  *       - in: query
  *         name: search
  *         schema:
@@ -151,13 +192,63 @@ router.post(
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       422:
- *         description: Invalid status value.
+ *         description: Invalid status value, or an invalid date range (unknown range, missing/invalid from or to, to before from, more than 30 days), or an invalid assigneeType/assigneeId.
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskController.getAdminTasks);
+
+/**
+ * @openapi
+ * /tasks/{taskId}:
+ *   get:
+ *     tags:
+ *       - Tasks
+ *     summary: Get one task
+ *     description: |
+ *       Returns a single task regardless of its age or status, so a task opened from an old date range is
+ *       always reachable. Admin can fetch any task. A staff member can only fetch a task assigned to them -
+ *       anything else returns 404, the same response as a task that doesn't exist.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: 6aae1234ab56cd78ef901234
+ *     responses:
+ *       200:
+ *         description: Task fetched successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         task:
+ *                           $ref: '#/components/schemas/TaskRecord'
+ *       401:
+ *         description: Authentication token missing, invalid, expired, or logged out.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Task not found, deleted, or (for a staff token) not assigned to the caller.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.get('/:taskId', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskController.getTask);
 
 /**
  * @openapi

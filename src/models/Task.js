@@ -12,7 +12,10 @@ const taskSchema = new mongoose.Schema(
     broker: { type: String, default: null },
     // No `ref`: this can point at either Admin or Staff, same as assignee_id - see created_by_type.
     created_by: { type: mongoose.Schema.Types.ObjectId, required: true },
-    created_by_type: { type: String, enum: Object.values(AssigneeType), required: true },
+    // The default only ever applies to rows created before this field existed (migration 003): every one
+    // of those was created by an admin, since staff couldn't create tasks yet. Without it, any save of such
+    // a row failed validation, which surfaced as a 500 on status change/edit/delete. createTask always sets it.
+    created_by_type: { type: String, enum: Object.values(AssigneeType), required: true, default: AssigneeType.ADMIN },
     assignee_type: { type: String, enum: Object.values(AssigneeType), required: true },
     assignee_id: { type: mongoose.Schema.Types.ObjectId, required: true },
     priority: { type: String, enum: Object.values(TaskPriority), required: true },

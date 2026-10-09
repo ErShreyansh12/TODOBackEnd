@@ -31,11 +31,16 @@ async function createTask(req, res, next) {
 
 async function getAdminTasks(req, res, next) {
   try {
-    const { search, status } = req.query;
+    const { search, status, range, from, to, assigneeType, assigneeId } = req.query;
     const { page, limit, skip } = parsePagination(req.query);
-    const { tasks, pagination } = await taskService.getTasksForAdmin({
+    const { tasks, pagination, range: appliedRange, counts } = await taskService.getTasksForAdmin({
       search,
       status,
+      range,
+      from,
+      to,
+      assigneeType,
+      assigneeId,
       page,
       limit,
       skip,
@@ -48,6 +53,26 @@ async function getAdminTasks(req, res, next) {
       message: 'Tasks fetched successfully.',
       data: tasks,
       pagination,
+      range: appliedRange,
+      counts,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function getTask(req, res, next) {
+  try {
+    const task = await taskService.getTaskById({
+      taskId: req.params.taskId,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+    });
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Task fetched successfully.',
+      data: { task },
     });
   } catch (err) {
     return next(err);
@@ -106,4 +131,4 @@ async function deleteTask(req, res, next) {
   }
 }
 
-module.exports = { createTask, getAdminTasks, updateTask, updateTaskStatus, deleteTask };
+module.exports = { createTask, getAdminTasks, getTask, updateTask, updateTaskStatus, deleteTask };

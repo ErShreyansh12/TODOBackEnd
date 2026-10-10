@@ -96,26 +96,32 @@ router.post(
  *       Admin sees every task in the system — both tasks assigned to an admin and tasks assigned to staff
  *       members, not just tasks the caller created. A staff caller only sees tasks assigned to themselves.
  *
- *       Without a `status` filter, the list defaults to a working window: every open task (todo/in_progress/delayed,
+ *       Without a `status` filter, the list defaults to a working window: every open task (todo/delayed,
  *       regardless of age) plus tasks completed in the last 7 days. Older completed history is reachable by
- *       explicitly filtering `status=completed`. This keeps the list from growing without bound as recurring
- *       tasks generate more occurrences over time.
+ *       filtering `status=completed` or `status=completed_late`. This keeps the list from growing without bound
+ *       as recurring tasks generate more occurrences over time.
  *
- *       `status` accepts `delayed` in addition to the three stored statuses — a task is delayed when its due
- *       date has passed and it isn't completed yet; this is computed, not stored, same as `displayStatus` on
- *       each returned task.
+ *       `status` filters by display status, the same value as `displayStatus` on each returned task. Users only
+ *       ever set a task open or completed; the rest is derived from the dates, never stored:
+ *       - `todo`: open, due date not passed.
+ *       - `delayed`: open, due date passed.
+ *       - `completed`: completed on or before the due date.
+ *       - `completed_late`: completed after the due date (completionAt, or updatedAt for old records).
  *
  *       `range` limits the list to tasks whose due date falls in a window of whole calendar days (server time
  *       zone, Asia/Kolkata). When it is used, the default working window above is not applied: the range is
  *       the window, so completed tasks of any age inside it are included. `status` and `search` still narrow
  *       the result. The response carries the resolved `range` ({ range, from, to }, inclusive YYYY-MM-DD).
+ *       - `today`: today only.
  *       - `yesterday_to_tomorrow`: yesterday, today and tomorrow.
  *       - `this_week` / `last_week`: Monday to Sunday of the current / previous week.
  *       - `custom`: `from` and `to` are required (inclusive); at most 30 days.
  *
- *       Results are paged with `page` and `limit` (max 100). For an admin caller the response also has `counts`
- *       ({ all, admin, staff }): how many tasks match the search/status/date range/assigneeId filters on each
- *       side, ignoring `assigneeType` so the "My tasks / Staff tasks" tabs can show both numbers at once.
+ *       Results are paged with `page` and `limit` (max 100). The response has `counts.byStatus`
+ *       ({ todo, delayed, completed, completed_late }): how many tasks match the search/date range/assignee
+ *       filters in each display status, ignoring `status`, so status tabs can all show a number at once.
+ *       For an admin caller `counts` also has { all, admin, staff }: how many tasks match the
+ *       search/status/date range/assigneeId filters on each side, ignoring `assigneeType`.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -123,7 +129,7 @@ router.post(
  *         name: range
  *         schema:
  *           type: string
- *           enum: [yesterday_to_tomorrow, this_week, last_week, custom]
+ *           enum: [today, yesterday_to_tomorrow, this_week, last_week, custom]
  *         description: Omit for the default working-window view.
  *       - in: query
  *         name: from
@@ -157,7 +163,7 @@ router.post(
  *         name: status
  *         schema:
  *           type: string
- *           enum: [todo, in_progress, delayed, completed]
+ *           enum: [todo, delayed, completed, completed_late]
  *         description: Omit for the default working-window view.
  *       - in: query
  *         name: page
@@ -258,12 +264,12 @@ router.get('/:taskId', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), task
  *       - Tasks
  *     summary: Change a task's status
  *     description: |
- *       Sets status to todo, in_progress, or completed ("delayed" can never be set directly - it's always
+ *       Sets status to todo or completed ("delayed" and "completed_late" can never be set directly - it's always
  *       computed from the due date, matching the SRS rule that staff must not be able to mark a task delayed
  *       themselves).
  *
  *       Setting status to completed records completionAt (now) on both the task and its series. Moving away
- *       from completed back to todo/in_progress clears completionAt on both again.
+ *       from completed back to todo clears completionAt on both again.
  *
  *       Admin can change the status of any task. A staff member can only change the status of a task assigned
  *       to them - a task assigned to someone else (or a non-existent one) returns 404, the same response either
@@ -288,7 +294,7 @@ router.get('/:taskId', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), task
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [todo, in_progress, completed]
+ *                 enum: [todo, completed]
  *     responses:
  *       200:
  *         description: Task status updated successfully.
@@ -317,7 +323,7 @@ router.get('/:taskId', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), task
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       422:
- *         description: Validation error (status missing or not one of todo/in_progress/completed).
+ *         description: Validation error (status missing or not one of todo/completed).
  *         content:
  *           application/json:
  *             schema:

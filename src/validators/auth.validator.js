@@ -10,4 +10,9 @@ const staffLoginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
-module.exports = { loginSchema, staffLoginSchema };
+const changePasswordSchema = Joi.object({
+  currentPassword: Joi.string().required(),
+  newPassword: Joi.string().min(6).max(100).required(),
+});
+
+module.exports = { loginSchema, staffLoginSchema, changePasswordSchema };

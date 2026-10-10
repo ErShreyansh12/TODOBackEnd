@@ -4,7 +4,7 @@ const authenticate = require('../middlewares/auth.middleware');
 const requireRole = require('../middlewares/role.middleware');
 const validate = require('../middlewares/validate.middleware');
 const Roles = require('../constants/roles');
-const { createStaffSchema, updateStaffStatusSchema } = require('../validators/staff.validator');
+const { createStaffSchema, updateStaffStatusSchema, resetStaffPasswordSchema } = require('../validators/staff.validator');
 
 const router = express.Router();
 
@@ -416,6 +416,77 @@ router.patch(
   requireRole(Roles.ADMIN),
   validate(updateStaffStatusSchema),
   staffController.updateStaffStatus
+);
+
+/**
+ * @openapi
+ * /staff/{staffId}/password:
+ *   patch:
+ *     tags:
+ *       - Staff
+ *     summary: Reset a staff member's password
+ *     description: Sets a new password for the staff member. Admin only.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: staffId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: EMP-001
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - password
+ *             properties:
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *                 maxLength: 100
+ *                 example: newpass123
+ *     responses:
+ *       200:
+ *         description: Password reset successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponse'
+ *       401:
+ *         description: Authentication token missing, invalid, or expired.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged-in user is not an admin.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Staff member not found.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation error (password missing or not 6-100 characters).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch(
+  '/:staffId/password',
+  authenticate,
+  requireRole(Roles.ADMIN),
+  validate(resetStaffPasswordSchema),
+  staffController.resetStaffPassword
 );
 
 module.exports = router;

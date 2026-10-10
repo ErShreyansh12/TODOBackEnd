@@ -98,4 +98,17 @@ async function updateStaffStatus(req, res, next) {
   }
 }
 
-module.exports = { createStaff, getStaff, deleteStaff, updateStaff, updateStaffStatus };
+async function resetStaffPassword(req, res, next) {
+  try {
+    await staffService.resetStaffPassword(req.params.staffId, req.body.password);
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Password reset successfully.',
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { createStaff, getStaff, deleteStaff, updateStaff, updateStaffStatus, resetStaffPassword };

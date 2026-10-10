@@ -42,10 +42,8 @@ const taskFields = {
 
 const createTaskSchema = Joi.object({
   ...taskFields,
-  // A brand-new task can't already be completed.
-  status: Joi.string()
-    .valid(TaskStatus.TODO, TaskStatus.IN_PROGRESS)
-    .default(TaskStatus.TODO),
+  // A new task always starts open. Older clients may still send a status; it can only be "todo".
+  status: Joi.string().valid(TaskStatus.TODO).default(TaskStatus.TODO),
 });
 
 const updateTaskSchema = Joi.object({
@@ -56,8 +54,9 @@ const updateTaskSchema = Joi.object({
 });
 
 const updateTaskStatusSchema = Joi.object({
+  // Two user-facing states only: open or completed. Delayed / completed late are derived, never set.
   status: Joi.string()
-    .valid(...Object.values(TaskStatus))
+    .valid(TaskStatus.TODO, TaskStatus.COMPLETED)
     .required(),
 });
 

@@ -89,7 +89,7 @@ const options = {
               description: 'Required only when timeline is custom. Dates must be in the future.',
             },
             priority: { type: 'string', enum: ['low', 'medium', 'high'], example: 'high' },
-            status: { type: 'string', enum: ['todo', 'in_progress'], default: 'todo' },
+            status: { type: 'string', enum: ['todo'], default: 'todo', description: 'New tasks always start open.' },
           },
         },
         TaskRecord: {
@@ -112,11 +112,12 @@ const options = {
               },
             },
             priority: { type: 'string', example: 'high' },
-            status: { type: 'string', example: 'todo', description: 'Stored status: todo, in_progress or completed' },
+            status: { type: 'string', example: 'todo', description: 'Stored status: todo or completed (legacy in_progress reads as todo)' },
             displayStatus: {
               type: 'string',
               example: 'delayed',
-              description: 'Computed status: same as status, but becomes delayed once due date has passed and it is not completed',
+              enum: ['todo', 'delayed', 'completed', 'completed_late'],
+              description: 'Derived status: delayed when open past its due date, completed_late when completed after it',
             },
             timeline: { type: 'string', example: 'daily' },
             customDates: {

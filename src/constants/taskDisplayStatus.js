@@ -1,11 +1,13 @@
-// The DB only stores todo/in_progress/completed (see TaskStatus). "Delayed" is never stored -
-// it's computed from due_date vs now, same as the frontend's getDisplayStatus already does.
+// What users see. The DB only stores todo/completed (see TaskStatus); everything else is derived when
+// a task is read, never set by hand:
+// - delayed: still open and its due date has passed.
+// - completed_late: completed after its due date (completion_at, or updated_at for old records without it).
 // This is the single vocabulary clients filter by and see in the `displayStatus` response field.
 const TaskDisplayStatus = Object.freeze({
   TODO: 'todo',
-  IN_PROGRESS: 'in_progress',
   DELAYED: 'delayed',
   COMPLETED: 'completed',
+  COMPLETED_LATE: 'completed_late',
 });
 
 module.exports = TaskDisplayStatus;

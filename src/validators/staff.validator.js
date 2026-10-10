@@ -14,4 +14,8 @@ const updateStaffStatusSchema = Joi.object({
     .required(),
 });
 
-module.exports = { createStaffSchema, updateStaffStatusSchema };
+const resetStaffPasswordSchema = Joi.object({
+  password: Joi.string().min(6).max(100).required(),
+});
+
+module.exports = { createStaffSchema, updateStaffStatusSchema, resetStaffPasswordSchema };

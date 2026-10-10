@@ -1,8 +1,10 @@
 const express = require('express');
 const authController = require('../controllers/auth.controller');
 const authenticate = require('../middlewares/auth.middleware');
+const requireRole = require('../middlewares/role.middleware');
 const validate = require('../middlewares/validate.middleware');
-const { loginSchema, staffLoginSchema } = require('../validators/auth.validator');
+const Roles = require('../constants/roles');
+const { loginSchema, staffLoginSchema, changePasswordSchema } = require('../validators/auth.validator');
 
 const router = express.Router();
 
@@ -168,5 +170,67 @@ router.post('/staff-login', validate(staffLoginSchema), authController.staffLogi
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/logout', authenticate, authController.logout);
+
+/**
+ * @openapi
+ * /auth/password:
+ *   patch:
+ *     tags:
+ *       - Auth
+ *     summary: Change the admin's own password
+ *     description: Changes the signed-in admin's password. The current password must be given. Admin only.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - currentPassword
+ *               - newPassword
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *                 example: oldpass123
+ *               newPassword:
+ *                 type: string
+ *                 minLength: 6
+ *                 maxLength: 100
+ *                 example: newpass123
+ *     responses:
+ *       200:
+ *         description: Password changed successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponse'
+ *       401:
+ *         description: Authentication token missing, invalid, or expired.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged-in user is not an admin.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Current password is wrong, or the new password is not 6-100 characters.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch(
+  '/password',
+  authenticate,
+  requireRole(Roles.ADMIN),
+  validate(changePasswordSchema),
+  authController.changePassword
+);
 
 module.exports = router;

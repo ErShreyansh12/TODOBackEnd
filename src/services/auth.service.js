@@ -78,4 +78,20 @@ async function logout({ userId, role, token }) {
   }
 }
 
-module.exports = { loginAdmin, loginStaff, logout };
+// The current password is required, so a token left signed in somewhere can't be used to take over the account.
+async function changeAdminPassword({ adminId, currentPassword, newPassword }) {
+  const admin = await Admin.findOne({ _id: adminId, deleted_at: null }).select('+password');
+
+  if (!admin) {
+    throw new AppError('Account not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  if (currentPassword !== admin.password) {
+    throw new AppError('Current password is incorrect.', 422, ErrorCodes.VALIDATION_ERROR);
+  }
+
+  admin.password = newPassword;
+  await admin.save();
+}
+
+module.exports = { loginAdmin, loginStaff, logout, changeAdminPassword };

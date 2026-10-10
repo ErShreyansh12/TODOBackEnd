@@ -158,6 +158,19 @@ async function updateStaffStatus(staffId, status) {
   return formatStaffResponse(staff);
 }
 
+async function resetStaffPassword(staffId, password) {
+  const staff = await Staff.findOne({ employee_code: staffId, deleted_at: null });
+
+  if (!staff) {
+    throw new AppError('Staff member not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  // Stored as plain text, same as login compares it (see auth.service).
+  staff.password = password;
+  staff.password_reset_at = new Date();
+  await staff.save();
+}
+
 module.exports = {
   formatStaffResponse,
   createStaff,
@@ -166,4 +179,5 @@ module.exports = {
   deleteStaff,
   updateStaff,
   updateStaffStatus,
+  resetStaffPassword,
 };

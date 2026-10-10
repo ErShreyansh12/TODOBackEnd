@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -20,6 +21,12 @@ app.use(
     stream: { write: (message) => logger.info(message.trim()) },
   })
 );
+
+// Used by the Docker HEALTHCHECK. 503 until Mongo is connected, so the container only reports healthy when it can serve requests.
+app.get('/health', (req, res) => {
+  const ready = mongoose.connection.readyState === 1;
+  res.status(ready ? 200 : 503).json({ status: ready ? 'ok' : 'unavailable' });
+});
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));

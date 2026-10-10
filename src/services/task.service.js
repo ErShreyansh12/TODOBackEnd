@@ -55,15 +55,29 @@ async function resolveAssignee(assigneeType, assigneeId) {
   return { type: AssigneeType.ADMIN, id: admin._id, name: admin.name };
 }
 
-// A completed task must never show as delayed, even if its due date has passed (business rule from the SRS).
+const OPEN_STATUSES = [TaskStatus.TODO, TaskStatus.IN_PROGRESS];
+
+// Old records completed before completion_at existed fall back to updated_at, which was the completion
+// time then. Shared by computeDisplayStatus and the completed / completed_late list filters.
+const COMPLETED_AT_EXPR = { $ifNull: ['$completion_at', '$updated_at'] };
+const COMPLETED_LATE_EXPR = {
+  $and: [{ $ne: [{ $ifNull: ['$due_date', null] }, null] }, { $gt: [COMPLETED_AT_EXPR, '$due_date'] }],
+};
+
+// Users only set two states (open or completed); the four display states are derived from the dates.
+// A completed task never shows as delayed (business rule from the SRS), only as completed or completed late.
 function computeDisplayStatus(task, now = new Date()) {
   if (task.status === TaskStatus.COMPLETED) {
-    return TaskDisplayStatus.COMPLETED;
+    const completedAt = task.completion_at || task.updated_at;
+    return task.due_date && completedAt && completedAt > task.due_date
+      ? TaskDisplayStatus.COMPLETED_LATE
+      : TaskDisplayStatus.COMPLETED;
   }
   if (task.due_date && task.due_date < now) {
     return TaskDisplayStatus.DELAYED;
   }
-  return task.status;
+  // Legacy in_progress records read as todo.
+  return TaskDisplayStatus.TODO;
 }
 
 function formatTaskResponse(task, assigneeName) {
@@ -218,29 +232,34 @@ async function attachAssigneeNames(tasks) {
   return tasks.map((task) => formatTaskResponse(task, nameById.get(String(task.assignee_id)) || null));
 }
 
-function applyDisplayStatusFilter(filter, status, now, hasDateRange) {
+// Returns a copy of `base` narrowed to one display status. Without a status, the default window applies:
+// anything still open (any age) plus completed tasks from the last few days. That window is skipped when
+// the caller asked for a date range: the range itself is then the window, and it must include completed
+// tasks of any age (e.g. "last week").
+function withDisplayStatus(base, status, now, hasDateRange) {
+  const filter = { ...base };
+
   if (status === TaskDisplayStatus.COMPLETED) {
     filter.status = TaskStatus.COMPLETED;
+    filter.$expr = { $not: [COMPLETED_LATE_EXPR] };
+  } else if (status === TaskDisplayStatus.COMPLETED_LATE) {
+    filter.status = TaskStatus.COMPLETED;
+    filter.$expr = COMPLETED_LATE_EXPR;
   } else if (status === TaskDisplayStatus.DELAYED) {
-    filter.status = { $in: [TaskStatus.TODO, TaskStatus.IN_PROGRESS] };
+    filter.status = { $in: OPEN_STATUSES };
     filter.due_date = { $lt: now };
   } else if (status === TaskDisplayStatus.TODO) {
-    filter.status = TaskStatus.TODO;
-    filter.$or = [{ due_date: null }, { due_date: { $gte: now } }];
-  } else if (status === TaskDisplayStatus.IN_PROGRESS) {
-    filter.status = TaskStatus.IN_PROGRESS;
+    filter.status = { $in: OPEN_STATUSES };
     filter.$or = [{ due_date: null }, { due_date: { $gte: now } }];
   } else if (!hasDateRange) {
-    // Default window: anything still open (any age) plus completed tasks from the last few days.
-    // Skipped when the caller asked for a date range: the range itself is then the window, and it must
-    // include completed tasks of any age (e.g. "last week").
-    // There's no dedicated "completed_at" field, so updated_at is used as when it was marked completed.
     const recentCutoff = new Date(now.getTime() - RECENT_COMPLETED_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     filter.$or = [
-      { status: { $in: [TaskStatus.TODO, TaskStatus.IN_PROGRESS] } },
+      { status: { $in: OPEN_STATUSES } },
       { status: TaskStatus.COMPLETED, updated_at: { $gte: recentCutoff } },
     ];
   }
+
+  return filter;
 }
 
 async function getTasksForAdmin({
@@ -275,47 +294,72 @@ async function getTasksForAdmin({
 
   const dateRange = range ? resolveDueDateRange({ range, from, to }, env.appTimezone) : null;
 
-  const filter = { deleted_at: null };
+  const now = new Date();
+  const base = { deleted_at: null };
 
   if (search) {
-    filter.title = { $regex: escapeRegex(search), $options: 'i' };
+    base.title = { $regex: escapeRegex(search), $options: 'i' };
   }
 
-  applyDisplayStatusFilter(filter, status, new Date(), Boolean(dateRange));
-
   if (dateRange) {
-    // In $and so it combines with the due_date condition the "delayed" status filter already sets.
-    filter.$and = [{ due_date: { $gte: dateRange.start, $lt: dateRange.end } }];
+    // In $and so it combines with the due_date condition the "delayed" status filter sets.
+    base.$and = [{ due_date: { $gte: dateRange.start, $lt: dateRange.end } }];
   }
 
   if (assigneeId) {
-    filter.assignee_id = assigneeId;
+    base.assignee_id = assigneeId;
   }
 
   // A staff caller only ever sees their own tasks — same isolation rule already applied to status updates
   // and notes. Set last, so nothing in the query string can widen it. Admin is unrestricted (sees everyone's).
   if (actorRole === Roles.STAFF) {
-    filter.assignee_type = AssigneeType.STAFF;
-    filter.assignee_id = actorId;
+    base.assignee_type = AssigneeType.STAFF;
+    base.assignee_id = actorId;
   }
 
-  // The "My tasks / Staff tasks" split is applied to the list only: the counts below cover both sides.
-  const listFilter = actorRole === Roles.ADMIN && assigneeType ? { ...filter, assignee_type: assigneeType } : filter;
-
   const isAdmin = actorRole === Roles.ADMIN;
+  // The "My tasks / Staff tasks" split is applied to the list and the per-status counts; the admin/staff
+  // counts below cover both sides so both tabs can show a number at once.
+  const ownerBase = isAdmin && assigneeType ? { ...base, assignee_type: assigneeType } : base;
+  const filter = withDisplayStatus(base, status, now, Boolean(dateRange));
+  const listFilter = withDisplayStatus(ownerBase, status, now, Boolean(dateRange));
+
+  // aggregate() doesn't cast like find() does, so the id fields are cast here.
+  const toMatch = (query) =>
+    query.assignee_id ? { ...query, assignee_id: new mongoose.Types.ObjectId(String(query.assignee_id)) } : query;
+
+  // Open tasks first (oldest due first, so delayed ones lead), completed ones last, most recent first.
   // _id breaks ties between tasks due at the same minute, so paging through them is stable.
-  const [tasks, total, adminCount, staffCount] = await Promise.all([
-    Task.find(listFilter).sort({ due_date: 1, _id: 1 }).skip(skip).limit(limit),
+  const isCompletedView = status === TaskDisplayStatus.COMPLETED || status === TaskDisplayStatus.COMPLETED_LATE;
+  const sort = isCompletedView ? { due_date: -1, _id: -1 } : { is_completed: 1, due_date: 1, _id: 1 };
+
+  const displayStatuses = Object.values(TaskDisplayStatus);
+  const [tasks, total, adminCount, staffCount, ...statusTotals] = await Promise.all([
+    Task.aggregate([
+      { $match: toMatch(listFilter) },
+      { $addFields: { is_completed: { $eq: ['$status', TaskStatus.COMPLETED] } } },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+    ]),
     Task.countDocuments(listFilter),
     isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.ADMIN }) : null,
     isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.STAFF }) : null,
+    ...displayStatuses.map((s) => Task.countDocuments(withDisplayStatus(ownerBase, s, now, Boolean(dateRange)))),
   ]);
+
+  // How many tasks are in each display status under the same search/range/assignee filters, ignoring
+  // `status` itself, so status tabs can all show a number at once. Given to every caller.
+  const byStatus = Object.fromEntries(displayStatuses.map((s, index) => [s, statusTotals[index]]));
+  const counts = isAdmin
+    ? { all: adminCount + staffCount, admin: adminCount, staff: staffCount, byStatus }
+    : { byStatus };
 
   return {
     tasks: await attachAssigneeNames(tasks),
     pagination: buildPaginationMeta({ page, limit, total }),
     range: dateRange && { range: dateRange.range, from: dateRange.from, to: dateRange.to },
-    counts: isAdmin ? { all: adminCount + staffCount, admin: adminCount, staff: staffCount } : null,
+    counts,
   };
 }
 

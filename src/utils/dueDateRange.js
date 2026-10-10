@@ -3,6 +3,7 @@ const AppError = require('./AppError');
 const ErrorCodes = require('../constants/errorCodes');
 
 const DateRange = Object.freeze({
+  TODAY: 'today',
   AROUND_TODAY: 'yesterday_to_tomorrow',
   THIS_WEEK: 'this_week',
   LAST_WEEK: 'last_week',
@@ -44,6 +45,10 @@ function resolveDueDateRange({ range, from, to }, timezone, now = new Date()) {
   let last;
 
   switch (range) {
+    case DateRange.TODAY:
+      first = today;
+      last = today;
+      break;
     case DateRange.AROUND_TODAY:
       first = today.minus({ days: 1 });
       last = today.plus({ days: 1 });

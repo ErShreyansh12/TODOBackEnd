@@ -19,7 +19,7 @@ const privateNoteSchema = new mongoose.Schema(
     },
     content_html: {
       type: String,
-      required: true,
+      default: '',
     },
     is_pinned: {
       type: Boolean,

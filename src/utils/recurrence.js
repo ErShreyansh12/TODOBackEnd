@@ -5,6 +5,8 @@ const WEEKDAY_SATURDAY = 6;
 const WEEKDAY_FRIDAY = 5;
 const MAX_DAY_SCAN = 14;
 const MAX_MONTH_SCAN = 3;
+// How far ahead a repeat rule is searched for its next day: enough for "every 12 months" or "every 52 weeks".
+const MAX_REPEAT_SCAN_DAYS = 3 * 366;
 
 function atTime(dateTime, timeOfDay) {
   const [hour, minute] = timeOfDay.split(':').map(Number);
@@ -50,8 +52,47 @@ function customDateTimes(customDates, timeOfDay, timezone) {
     .sort((a, b) => a.toMillis() - b.toMillis());
 }
 
+// Whether a repeat rule ({ every, unit, weekdays?, monthDays?, start, until? }) falls on `day`. Intervals count
+// from the rule's start: "every 2 weeks" means the start's week, then every other week after it.
+function repeatMatches(day, rule, start) {
+  switch (rule.unit) {
+    case 'day':
+      return Math.round(day.diff(start, 'days').days) % rule.every === 0;
+    case 'week': {
+      if (!rule.weekdays.includes(day.weekday)) return false;
+      const weeks = Math.round(day.startOf('week').diff(start.startOf('week'), 'days').days) / 7;
+      return weeks % rule.every === 0;
+    }
+    case 'month': {
+      const months = (day.year - start.year) * 12 + (day.month - start.month);
+      if (months % rule.every !== 0) return false;
+      // A chosen day past the month's end (e.g. 31 in April) falls on the month's last day.
+      return rule.monthDays.some((monthDay) => Math.min(monthDay, day.daysInMonth) === day.day);
+    }
+    default:
+      throw new Error(`Unknown repeat unit: ${rule.unit}`);
+  }
+}
+
+function nextRepeat(after, timeOfDay, rule, timezone) {
+  const start = DateTime.fromISO(rule.start, { zone: timezone }).startOf('day');
+  const until = rule.until ? DateTime.fromISO(rule.until, { zone: timezone }).endOf('day') : null;
+  let day = DateTime.max(after.startOf('day'), start);
+
+  for (let i = 0; i < MAX_REPEAT_SCAN_DAYS; i += 1) {
+    if (until && day > until) return null;
+    if (repeatMatches(day, rule, start)) {
+      const candidate = atTime(day, timeOfDay);
+      if (candidate > after) return candidate;
+    }
+    day = day.plus({ days: 1 });
+  }
+
+  return null;
+}
+
 // Returns the first occurrence strictly after `after` as a UTC Date, or null when the timeline has no more occurrences.
-function nextOccurrence({ timeline, timeOfDay, timezone, customDates, monthlyDay, after }) {
+function nextOccurrence({ timeline, timeOfDay, timezone, customDates, monthlyDay, recurrence, after }) {
   const zonedAfter = DateTime.fromJSDate(after, { zone: timezone });
   let result = null;
 
@@ -73,6 +114,12 @@ function nextOccurrence({ timeline, timeOfDay, timezone, customDates, monthlyDay
       break;
     case TaskTimeline.CUSTOM:
       result = customDateTimes(customDates, timeOfDay, timezone).find((dateTime) => dateTime > zonedAfter) || null;
+      break;
+    case TaskTimeline.REPEAT:
+      result = nextRepeat(zonedAfter, timeOfDay, recurrence, timezone);
+      break;
+    case TaskTimeline.NONE:
+      result = null;
       break;
     default:
       throw new Error(`Unknown timeline: ${timeline}`);

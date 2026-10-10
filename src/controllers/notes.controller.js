@@ -43,6 +43,29 @@ async function createNote(req, res, next) {
   }
 }
 
+async function updateNote(req, res, next) {
+  try {
+    const ownerType = resolveOwnerType(req.user.role);
+    const { noteId } = req.params;
+    const { title, contentHtml } = req.body;
+    const note = await notesService.updateNote({
+      ownerType,
+      ownerId: req.user.id,
+      noteId,
+      title,
+      contentHtml,
+    });
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Note updated successfully.',
+      data: { note },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function togglePinNote(req, res, next) {
   try {
     const ownerType = resolveOwnerType(req.user.role);
@@ -91,4 +114,4 @@ async function toggleArchiveNote(req, res, next) {
   }
 }
 
-module.exports = { getNotes, createNote, togglePinNote, toggleArchiveNote, deleteNote };
+module.exports = { getNotes, createNote, updateNote, togglePinNote, toggleArchiveNote, deleteNote };

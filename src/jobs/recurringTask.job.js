@@ -36,6 +36,7 @@ async function processSeries(series, now) {
     timezone: series.timezone,
     customDates: series.custom_dates,
     monthlyDay: series.monthly_day,
+    recurrence: series.recurrence,
   };
 
   // Walk forward from the last occurrence, not from `now`: if the server was down (a deploy, a crash) the

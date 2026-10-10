@@ -6,7 +6,12 @@ const validate = require('../middlewares/validate.middleware');
 const { uploadTaskAttachment } = require('../middlewares/upload.middleware');
 const { normalizeCustomDates } = require('../middlewares/normalizeTaskBody.middleware');
 const Roles = require('../constants/roles');
-const { createTaskSchema, updateTaskSchema, updateTaskStatusSchema } = require('../validators/task.validator');
+const {
+  createTaskSchema,
+  updateTaskSchema,
+  updateTaskStatusSchema,
+  updateChecklistItemSchema,
+} = require('../validators/task.validator');
 
 const router = express.Router();
 
@@ -394,6 +399,53 @@ router.patch(
   authenticate,
   validate(updateTaskStatusSchema),
   taskController.updateTaskStatus
+);
+
+/**
+ * @openapi
+ * /tasks/{taskId}/checklist:
+ *   patch:
+ *     tags:
+ *       - Tasks
+ *     summary: Tick or untick one checklist item in a task's description
+ *     description: |
+ *       The description is rich text; its checklist items are numbered from 0 in document order. Only this
+ *       occurrence changes: the series keeps an unticked copy, so the next occurrence starts fresh.
+ *       Admins can tick any task, staff only tasks assigned to them.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [index, checked]
+ *             properties:
+ *               index:
+ *                 type: integer
+ *                 minimum: 0
+ *               checked:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: Checklist updated; returns the task.
+ *       404:
+ *         description: Task not found, deleted, or (for a staff token) not assigned to the caller.
+ *       422:
+ *         description: Validation error, or no checklist item at that index.
+ */
+router.patch(
+  '/:taskId/checklist',
+  authenticate,
+  validate(updateChecklistItemSchema),
+  taskController.updateChecklistItem
 );
 
 /**

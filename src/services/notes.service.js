@@ -4,6 +4,7 @@ const ErrorCodes = require('../constants/errorCodes');
 const AppError = require('../utils/AppError');
 
 const RECENT_NOTES_LIMIT = 5;
+const UNTITLED = 'Untitled note';
 
 function formatNoteResponse(note) {
   return {
@@ -50,7 +51,7 @@ async function createNote({ ownerType, ownerId, title, contentHtml }) {
   const note = await PrivateNote.create({
     owner_type: ownerType,
     owner_id: ownerId,
-    title,
+    title: title || UNTITLED,
     content_html: contentHtml,
     is_pinned: false,
     is_archived: false,
@@ -76,6 +77,16 @@ async function findOwnedNote({ ownerType, ownerId, noteId }) {
   }
 
   return note;
+}
+
+async function updateNote({ ownerType, ownerId, noteId, title, contentHtml }) {
+  const note = await findOwnedNote({ ownerType, ownerId, noteId });
+
+  note.title = title || UNTITLED;
+  note.content_html = contentHtml;
+  await note.save();
+
+  return formatNoteResponse(note);
 }
 
 async function togglePin({ ownerType, ownerId, noteId }) {
@@ -105,4 +116,4 @@ async function deleteNote({ ownerType, ownerId, noteId }) {
   return formatNoteResponse(note);
 }
 
-module.exports = { getNotesForOwner, createNote, togglePin, toggleArchive, deleteNote };
+module.exports = { getNotesForOwner, createNote, updateNote, togglePin, toggleArchive, deleteNote };

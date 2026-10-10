@@ -162,4 +162,33 @@ async function getTaskFacets(req, res, next) {
   }
 }
 
-module.exports = { createTask, getAdminTasks, getTaskFacets, getTask, updateTask, updateTaskStatus, deleteTask };
+async function updateChecklistItem(req, res, next) {
+  try {
+    const task = await taskService.updateChecklistItem({
+      taskId: req.params.taskId,
+      index: req.body.index,
+      checked: req.body.checked,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+    });
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Checklist updated successfully.',
+      data: { task },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = {
+  createTask,
+  getAdminTasks,
+  getTaskFacets,
+  getTask,
+  updateTask,
+  updateTaskStatus,
+  updateChecklistItem,
+  deleteTask,
+};

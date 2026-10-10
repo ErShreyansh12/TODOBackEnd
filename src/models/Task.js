@@ -23,6 +23,7 @@ const taskSchema = new mongoose.Schema(
     timeline: { type: String, default: null },
     due_date: { type: Date, default: null },
     custom_dates: { type: mongoose.Schema.Types.Mixed, default: null },
+    recurrence: { type: mongoose.Schema.Types.Mixed, default: null },
     delay_reason: { type: String, default: null },
     delay_reason_added_at: { type: Date, default: null },
     series_id: { type: mongoose.Schema.Types.ObjectId, ref: 'TaskSeries', default: null },

@@ -2,7 +2,7 @@ const express = require('express');
 const notesController = require('../controllers/notes.controller');
 const authenticate = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate.middleware');
-const { createNoteSchema } = require('../validators/notes.validator');
+const { createNoteSchema, updateNoteSchema } = require('../validators/notes.validator');
 
 const router = express.Router();
 
@@ -77,9 +77,6 @@ router.get('/', authenticate, notesController.getNotes);
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - title
- *               - contentHtml
  *             properties:
  *               title:
  *                 type: string
@@ -116,6 +113,57 @@ router.get('/', authenticate, notesController.getNotes);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/', authenticate, validate(createNoteSchema), notesController.createNote);
+
+/**
+ * @openapi
+ * /notes/{noteId}:
+ *   put:
+ *     tags:
+ *       - Notes
+ *     summary: Update a note's title and content
+ *     description: Saves the title and body of a note owned by the logged-in user. Either may be empty; an empty title is stored as "Untitled note". Any other user's note (or a missing one) returns 404.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: noteId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *                 example: Client Onboarding Checklist
+ *               contentHtml:
+ *                 type: string
+ *                 example: <p>Verify credentials before handoff.</p>
+ *     responses:
+ *       200:
+ *         description: Note updated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         note:
+ *                           $ref: '#/components/schemas/NoteRecord'
+ *       404:
+ *         description: Note not found (doesn't exist, belongs to another user, or is deleted).
+ *       422:
+ *         description: Validation error.
+ */
+router.put('/:noteId', authenticate, validate(updateNoteSchema), notesController.updateNote);
 
 /**
  * @openapi

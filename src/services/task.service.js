@@ -23,7 +23,9 @@ const {
   dayOfMonthIn,
   toLocalParts,
   customDateTimes,
+  todayIn,
 } = require('../utils/recurrence');
+const { sanitizeDescription, uncheckAll, setChecklistItem } = require('../utils/richText');
 
 const RECENT_COMPLETED_WINDOW_DAYS = 7;
 
@@ -99,6 +101,7 @@ function formatTaskResponse(task, assigneeName, createdByName = null) {
     displayStatus: computeDisplayStatus(task),
     timeline: task.timeline,
     customDates: Array.isArray(task.custom_dates) ? task.custom_dates.map((date) => ({ date })) : null,
+    recurrence: task.recurrence || null,
     dueDate,
     time,
     dueAt: task.due_date,
@@ -128,6 +131,7 @@ function buildOccurrenceData(series, dueDate, status) {
     timeline: series.timeline,
     due_date: dueDate,
     custom_dates: series.custom_dates,
+    recurrence: series.recurrence,
     series_id: series._id,
   };
 }
@@ -149,10 +153,47 @@ function prepareCustomDates(customDates, timeOfDay, now) {
   return dates;
 }
 
+// Works out a timeline's stored fields and its first due date from now. A task with no deadline has no
+// due date (and its series ends at once); every other timeline must have an upcoming date.
+function planSchedule(data, now) {
+  const timezone = env.appTimezone;
+
+  if (data.timeline === TaskTimeline.NONE) {
+    return { timeOfDay: null, customDates: null, monthlyDay: null, recurrence: null, dueDate: null };
+  }
+
+  const customDates = data.timeline === TaskTimeline.CUSTOM ? prepareCustomDates(data.customDates, data.time, now) : null;
+  const monthlyDay = data.timeline === TaskTimeline.MONTHLY ? dayOfMonthIn(now, timezone) : null;
+  let recurrence = null;
+  if (data.timeline === TaskTimeline.REPEAT) {
+    recurrence = { ...data.recurrence, start: data.recurrence.start || todayIn(timezone, now), until: data.recurrence.until || null };
+    const invalid = [recurrence.start, recurrence.until].find((date) => date && !isValidCalendarDate(date, timezone));
+    if (invalid) throw validationError(`"${invalid}" is not a valid calendar date.`);
+    if (recurrence.until && recurrence.until < recurrence.start) {
+      throw validationError('The repeat end date must be after its start date.');
+    }
+  }
+
+  const dueDate = nextOccurrence({
+    timeline: data.timeline,
+    timeOfDay: data.time,
+    timezone,
+    customDates,
+    monthlyDay,
+    recurrence,
+    after: now,
+  });
+
+  if (!dueDate) {
+    throw validationError('The selected timeline has no upcoming date.');
+  }
+
+  return { timeOfDay: data.time, customDates, monthlyDay, recurrence, dueDate };
+}
+
 async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
   const now = new Date();
   const timezone = env.appTimezone;
-  const isCustom = data.timeline === TaskTimeline.CUSTOM;
 
   // Staff can assign a task to themselves or to another active staff member, never to an admin.
   if (creatorType === AssigneeType.STAFF && data.assigneeType !== AssigneeType.STAFF) {
@@ -162,26 +203,12 @@ async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
   }
 
   const assignee = await resolveAssignee(data.assigneeType, data.assigneeId);
-
-  const customDates = isCustom ? prepareCustomDates(data.customDates, data.time, now) : null;
-  const monthlyDay = data.timeline === TaskTimeline.MONTHLY ? dayOfMonthIn(now, timezone) : null;
-
-  const firstDueDate = nextOccurrence({
-    timeline: data.timeline,
-    timeOfDay: data.time,
-    timezone,
-    customDates,
-    monthlyDay,
-    after: now,
-  });
-
-  if (!firstDueDate) {
-    throw validationError('The selected timeline has no upcoming date.');
-  }
+  const schedule = planSchedule(data, now);
+  const description = sanitizeDescription(data.description);
 
   const series = await TaskSeries.create({
     title: data.title,
-    description: data.description || null,
+    description: uncheckAll(description),
     attachment_url: attachmentUrl,
     broker: data.broker || null,
     created_by: creatorId,
@@ -190,15 +217,21 @@ async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
     assignee_id: assignee.id,
     priority: data.priority,
     timeline: data.timeline,
-    time_of_day: data.time,
+    time_of_day: schedule.timeOfDay,
     timezone,
-    custom_dates: customDates,
-    monthly_day: monthlyDay,
-    last_due_date: firstDueDate,
+    custom_dates: schedule.customDates,
+    monthly_day: schedule.monthlyDay,
+    recurrence: schedule.recurrence,
+    last_due_date: schedule.dueDate,
+    // Nothing for the recurring job to do for a task without a deadline.
+    ended_at: schedule.dueDate ? null : now,
   });
 
   try {
-    const task = await Task.create(buildOccurrenceData(series, firstDueDate, data.status));
+    const task = await Task.create({
+      ...buildOccurrenceData(series, schedule.dueDate, data.status),
+      description,
+    });
     return (await attachPeopleNames([task]))[0];
   } catch (err) {
     // No transactions on a standalone MongoDB, so undo the series manually rather than leave an orphan.
@@ -289,8 +322,9 @@ function parsePeople(value, name) {
 }
 
 const SORTS = {
-  due_asc: { due_date: 1, _id: 1 },
-  due_desc: { due_date: -1, _id: -1 },
+  // Tasks without a deadline sort after every dated one, both ways.
+  due_asc: { no_due_date: 1, due_date: 1, _id: 1 },
+  due_desc: { no_due_date: 1, due_date: -1, _id: -1 },
   title_asc: { title: 1, _id: 1 },
   title_desc: { title: -1, _id: -1 },
   broker_asc: { broker: 1, _id: 1 },
@@ -416,7 +450,7 @@ async function getTasksForAdmin({ page, limit, skip, actorId, actorRole, ...quer
   const completedOnly =
     parsed.statuses.length > 0 &&
     parsed.statuses.every((status) => status === TaskDisplayStatus.COMPLETED || status === TaskDisplayStatus.COMPLETED_LATE);
-  let sort = completedOnly ? { due_date: -1, _id: -1 } : { is_completed: 1, due_date: 1, _id: 1 };
+  let sort = completedOnly ? { due_date: -1, _id: -1 } : { is_completed: 1, no_due_date: 1, due_date: 1, _id: 1 };
   if (parsed.sort) sort = SORTS[parsed.sort];
 
   const displayStatuses = Object.values(TaskDisplayStatus);
@@ -424,7 +458,12 @@ async function getTasksForAdmin({ page, limit, skip, actorId, actorRole, ...quer
   const [tasks, total, allCount, mineCount, staffCount, ...statusTotals] = await Promise.all([
     Task.aggregate([
       { $match: listFilter },
-      { $addFields: { is_completed: { $eq: ['$status', TaskStatus.COMPLETED] } } },
+      {
+        $addFields: {
+          is_completed: { $eq: ['$status', TaskStatus.COMPLETED] },
+          no_due_date: { $eq: [{ $ifNull: ['$due_date', null] }, null] },
+        },
+      },
       { $sort: sort },
       { $skip: skip },
       { $limit: limit },
@@ -552,6 +591,32 @@ async function updateTaskStatus({ taskId, status, actorId, actorRole }) {
   return (await attachPeopleNames([task]))[0];
 }
 
+// Ticks one checklist item in this occurrence's description. Same access rule as changing the status:
+// an admin can tick any task, a staff member only a task assigned to them.
+async function updateChecklistItem({ taskId, index, checked, actorId, actorRole }) {
+  if (!mongoose.Types.ObjectId.isValid(taskId)) {
+    throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  const task = await Task.findOne({ _id: taskId, deleted_at: null });
+  const isOwnStaffTask =
+    task && task.assignee_type === AssigneeType.STAFF && String(task.assignee_id) === String(actorId);
+
+  if (!task || (actorRole === Roles.STAFF && !isOwnStaffTask)) {
+    throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  const description = setChecklistItem(task.description, index, checked);
+  if (description === null) {
+    throw validationError('That checklist item no longer exists. Refresh the task and try again.');
+  }
+
+  task.description = description;
+  await task.save();
+
+  return (await attachPeopleNames([task]))[0];
+}
+
 function deleteUploadedFile(url) {
   const filePath = path.join(TASK_UPLOAD_DIR, path.basename(url));
   fs.unlink(filePath, () => {});
@@ -578,30 +643,16 @@ async function updateTask({ taskId, data, attachmentUrl }) {
   }
 
   const now = new Date();
-  const timezone = env.appTimezone;
-  const isCustom = data.timeline === TaskTimeline.CUSTOM;
 
   const assignee = await resolveAssignee(data.assigneeType, data.assigneeId);
-  const customDates = isCustom ? prepareCustomDates(data.customDates, data.time, now) : null;
-  const monthlyDay = data.timeline === TaskTimeline.MONTHLY ? dayOfMonthIn(now, timezone) : null;
-
-  const newDueDate = nextOccurrence({
-    timeline: data.timeline,
-    timeOfDay: data.time,
-    timezone,
-    customDates,
-    monthlyDay,
-    after: now,
-  });
-
-  if (!newDueDate) {
-    throw validationError('The selected timeline has no upcoming date.');
-  }
+  const schedule = planSchedule(data, now);
+  const newDueDate = schedule.dueDate;
+  const description = sanitizeDescription(data.description);
 
   // Checked up front, before any write: the (series_id, due_date) unique index would otherwise
   // reject this after the series has already been saved, leaving series and occurrence inconsistent
   // (no transactions on a standalone MongoDB).
-  const conflict = await Task.exists({ series_id: series._id, due_date: newDueDate, _id: { $ne: task._id } });
+  const conflict = newDueDate && await Task.exists({ series_id: series._id, due_date: newDueDate, _id: { $ne: task._id } });
   if (conflict) {
     throw validationError('Another occurrence of this task already has that due date. Please choose a different time.');
   }
@@ -612,24 +663,25 @@ async function updateTask({ taskId, data, attachmentUrl }) {
 
   Object.assign(series, {
     title: data.title,
-    description: data.description || null,
+    description: uncheckAll(description),
     broker: data.broker || null,
     attachment_url: finalAttachmentUrl,
     assignee_type: assignee.type,
     assignee_id: assignee.id,
     priority: data.priority,
     timeline: data.timeline,
-    time_of_day: data.time,
-    custom_dates: customDates,
-    monthly_day: monthlyDay,
+    time_of_day: schedule.timeOfDay,
+    custom_dates: schedule.customDates,
+    monthly_day: schedule.monthlyDay,
+    recurrence: schedule.recurrence,
     last_due_date: newDueDate,
-    ended_at: null,
+    ended_at: newDueDate ? null : now,
   });
   await series.save();
 
   Object.assign(task, {
     title: data.title,
-    description: data.description || null,
+    description,
     broker: data.broker || null,
     attachment_url: finalAttachmentUrl,
     assignee_type: assignee.type,
@@ -637,7 +689,8 @@ async function updateTask({ taskId, data, attachmentUrl }) {
     priority: data.priority,
     timeline: data.timeline,
     due_date: newDueDate,
-    custom_dates: customDates,
+    custom_dates: schedule.customDates,
+    recurrence: schedule.recurrence,
   });
   await task.save();
 
@@ -685,6 +738,7 @@ module.exports = {
   getTaskById,
   updateTask,
   updateTaskStatus,
+  updateChecklistItem,
   deleteTask,
   buildOccurrenceData,
   formatTaskResponse,

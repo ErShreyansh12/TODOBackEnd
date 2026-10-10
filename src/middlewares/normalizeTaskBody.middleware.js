@@ -2,6 +2,7 @@
 // `customDates[0][date]` style fields, or (for JSON requests) an array of strings / { date } objects.
 // This turns all of them into a plain array of "YYYY-MM-DD" strings before validation.
 function normalizeCustomDates(req, res, next) {
+  normalizeRecurrence(req);
   let value = req.body ? req.body.customDates : undefined;
 
   if (value === undefined || value === null || value === '') {
@@ -25,6 +26,17 @@ function normalizeCustomDates(req, res, next) {
   );
 
   return next();
+}
+
+// The repeat rule arrives the same way: a JSON string in a multipart form, an object in a JSON request.
+function normalizeRecurrence(req) {
+  const value = req.body ? req.body.recurrence : undefined;
+  if (typeof value !== 'string' || value === '') return;
+  try {
+    req.body.recurrence = JSON.parse(value);
+  } catch (err) {
+    // Left as a string; validation rejects it with a clear message.
+  }
 }
 
 module.exports = { normalizeCustomDates };

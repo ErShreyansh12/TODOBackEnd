@@ -142,6 +142,28 @@ router.post(
 
 /**
  * @openapi
+ * /staff/options:
+ *   get:
+ *     tags:
+ *       - Staff
+ *     summary: Active staff for an assignee picker (admin and staff)
+ *     description: Returns every active staff member as { id, firstName, lastName }, sorted by name. Staff callers use it to assign tasks to each other, so no contact details are included.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Staff options fetched successfully.
+ *       401:
+ *         description: Authentication token missing, invalid, expired, or logged out.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.get('/options', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), staffController.getStaffOptions);
+
+/**
+ * @openapi
  * /staff/{staffId}:
  *   get:
  *     tags:

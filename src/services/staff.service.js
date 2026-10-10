@@ -95,6 +95,16 @@ async function getStaffList({ page, limit, skip }) {
   };
 }
 
+// Just enough to pick an assignee: active staff, id and name only. Open to staff callers too (they can
+// assign tasks to each other), so it deliberately leaves out contact details and codes.
+async function getStaffOptions() {
+  const staffMembers = await Staff.find({ deleted_at: null, status: StaffStatus.ACTIVE })
+    .select('first_name last_name')
+    .sort({ first_name: 1, last_name: 1 });
+
+  return staffMembers.map((staff) => ({ id: staff._id, firstName: staff.first_name, lastName: staff.last_name }));
+}
+
 async function getStaffByStaffId(staffId) {
   const staff = await Staff.findOne({ employee_code: staffId, deleted_at: null });
 
@@ -172,6 +182,7 @@ async function resetStaffPassword(staffId, password) {
 }
 
 module.exports = {
+  getStaffOptions,
   formatStaffResponse,
   createStaff,
   getStaffList,

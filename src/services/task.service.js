@@ -80,7 +80,7 @@ function computeDisplayStatus(task, now = new Date()) {
   return TaskDisplayStatus.TODO;
 }
 
-function formatTaskResponse(task, assigneeName) {
+function formatTaskResponse(task, assigneeName, createdByName = null) {
   const { dueDate, time } = task.due_date ? toLocalParts(task.due_date, env.appTimezone) : { dueDate: null, time: null };
 
   return {
@@ -92,6 +92,7 @@ function formatTaskResponse(task, assigneeName) {
     broker: task.broker || null,
     createdBy: task.created_by,
     createdByType: task.created_by_type,
+    createdByName,
     assignee: { type: task.assignee_type, id: task.assignee_id, name: assigneeName },
     priority: task.priority,
     status: task.status,
@@ -153,14 +154,11 @@ async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
   const timezone = env.appTimezone;
   const isCustom = data.timeline === TaskTimeline.CUSTOM;
 
-  if (creatorType === AssigneeType.STAFF) {
-    const isSelfAssigned = data.assigneeType === AssigneeType.STAFF && String(data.assigneeId) === String(creatorId);
-
-    if (!isSelfAssigned) {
-      // Checked before resolveAssignee's DB lookup: the problem here is who it's assigned to,
-      // not whether that assignee exists, so this gives a clearer message regardless.
-      throw validationError('Staff can only create tasks assigned to themselves.');
-    }
+  // Staff can assign a task to themselves or to another active staff member, never to an admin.
+  if (creatorType === AssigneeType.STAFF && data.assigneeType !== AssigneeType.STAFF) {
+    // Checked before resolveAssignee's DB lookup: the problem here is who it's assigned to,
+    // not whether that assignee exists, so this gives a clearer message regardless.
+    throw validationError('Staff can only assign tasks to staff members.');
   }
 
   const assignee = await resolveAssignee(data.assigneeType, data.assigneeId);
@@ -201,7 +199,7 @@ async function createTask({ creatorId, creatorType, data, attachmentUrl }) {
 
   try {
     const task = await Task.create(buildOccurrenceData(series, firstDueDate, data.status));
-    return formatTaskResponse(task, assignee.name);
+    return (await attachPeopleNames([task]))[0];
   } catch (err) {
     // No transactions on a standalone MongoDB, so undo the series manually rather than leave an orphan.
     await TaskSeries.deleteOne({ _id: series._id });
@@ -213,12 +211,13 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Resolves assignee names in two batched queries instead of one query per task.
-// Looked up without a deleted_at filter: a task assigned to someone since deleted should
+// Resolves people's names in two batched queries (one per collection) instead of one query per row.
+// Looked up without a deleted_at filter: a task assigned to (or created by) someone since deleted should
 // still show that person's name in a historical list, not a blank.
-async function attachAssigneeNames(tasks) {
-  const staffIds = [...new Set(tasks.filter((t) => t.assignee_type === AssigneeType.STAFF).map((t) => String(t.assignee_id)))];
-  const adminIds = [...new Set(tasks.filter((t) => t.assignee_type === AssigneeType.ADMIN).map((t) => String(t.assignee_id)))];
+async function resolvePeopleNames(people) {
+  const idsOf = (type) => [...new Set(people.filter((person) => person.type === type).map((person) => String(person.id)))];
+  const staffIds = idsOf(AssigneeType.STAFF);
+  const adminIds = idsOf(AssigneeType.ADMIN);
 
   const [staffDocs, adminDocs] = await Promise.all([
     staffIds.length ? Staff.find({ _id: { $in: staffIds } }) : [],
@@ -228,55 +227,86 @@ async function attachAssigneeNames(tasks) {
   const nameById = new Map();
   staffDocs.forEach((staff) => nameById.set(String(staff._id), `${staff.first_name} ${staff.last_name}`));
   adminDocs.forEach((admin) => nameById.set(String(admin._id), admin.name));
-
-  return tasks.map((task) => formatTaskResponse(task, nameById.get(String(task.assignee_id)) || null));
+  return nameById;
 }
 
-// Returns a copy of `base` narrowed to one display status. Without a status, the default window applies:
-// anything still open (any age) plus completed tasks from the last few days. That window is skipped when
-// the caller asked for a date range: the range itself is then the window, and it must include completed
-// tasks of any age (e.g. "last week").
-function withDisplayStatus(base, status, now, hasDateRange) {
-  const filter = { ...base };
+async function attachPeopleNames(tasks) {
+  const nameById = await resolvePeopleNames(
+    tasks.flatMap((task) => [
+      { type: task.assignee_type, id: task.assignee_id },
+      { type: task.created_by_type, id: task.created_by },
+    ])
+  );
+  return tasks.map((task) =>
+    formatTaskResponse(task, nameById.get(String(task.assignee_id)) || null, nameById.get(String(task.created_by)) || null)
+  );
+}
 
-  if (status === TaskDisplayStatus.COMPLETED) {
-    filter.status = TaskStatus.COMPLETED;
-    filter.$expr = { $not: [COMPLETED_LATE_EXPR] };
-  } else if (status === TaskDisplayStatus.COMPLETED_LATE) {
-    filter.status = TaskStatus.COMPLETED;
-    filter.$expr = COMPLETED_LATE_EXPR;
-  } else if (status === TaskDisplayStatus.DELAYED) {
-    filter.status = { $in: OPEN_STATUSES };
-    filter.due_date = { $lt: now };
-  } else if (status === TaskDisplayStatus.TODO) {
-    filter.status = { $in: OPEN_STATUSES };
-    filter.$or = [{ due_date: null }, { due_date: { $gte: now } }];
-  } else if (!hasDateRange) {
-    const recentCutoff = new Date(now.getTime() - RECENT_COMPLETED_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-    filter.$or = [
-      { status: { $in: OPEN_STATUSES } },
-      { status: TaskStatus.COMPLETED, updated_at: { $gte: recentCutoff } },
-    ];
+// The condition one display status adds to a query. The display statuses are derived from the dates, so
+// they can't be a plain field match.
+function displayStatusCondition(status, now) {
+  switch (status) {
+    case TaskDisplayStatus.COMPLETED:
+      return { status: TaskStatus.COMPLETED, $expr: { $not: [COMPLETED_LATE_EXPR] } };
+    case TaskDisplayStatus.COMPLETED_LATE:
+      return { status: TaskStatus.COMPLETED, $expr: COMPLETED_LATE_EXPR };
+    case TaskDisplayStatus.DELAYED:
+      return { status: { $in: OPEN_STATUSES }, due_date: { $lt: now } };
+    default:
+      return { status: { $in: OPEN_STATUSES }, $or: [{ due_date: null }, { due_date: { $gte: now } }] };
   }
-
-  return filter;
 }
 
-async function getTasksForAdmin({
-  search,
-  status,
-  range,
-  from,
-  to,
-  assigneeType,
-  assigneeId,
-  page,
-  limit,
-  skip,
-  actorId,
-  actorRole,
-}) {
-  if (status && !Object.values(TaskDisplayStatus).includes(status)) {
+// Without any status filter and without a date range, the default window applies: anything still open
+// (any age) plus completed tasks from the last few days. A date range is itself the window, and must
+// include completed tasks of any age (e.g. "last week").
+function recentWindowCondition(now) {
+  const recentCutoff = new Date(now.getTime() - RECENT_COMPLETED_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  return {
+    $or: [{ status: { $in: OPEN_STATUSES } }, { status: TaskStatus.COMPLETED, updated_at: { $gte: recentCutoff } }],
+  };
+}
+
+const anyOf = (conditions) => (conditions.length === 1 ? conditions[0] : { $or: conditions });
+
+// Accepts "a,b" or repeated ?key=a&key=b. Empty entries are kept: an empty broker means "no broker".
+function parseList(value) {
+  if (value === undefined || value === null) return [];
+  return (Array.isArray(value) ? value : String(value).split(',')).map((entry) => String(entry).trim());
+}
+
+// People are sent as "<type>:<id>" because admins and staff live in separate collections.
+function parsePeople(value, name) {
+  return parseList(value)
+    .filter(Boolean)
+    .map((entry) => {
+      const [type, id] = entry.split(':');
+      if (!Object.values(AssigneeType).includes(type) || !mongoose.Types.ObjectId.isValid(id)) {
+        throw validationError(`"${name}" entries must look like admin:<id> or staff:<id>.`);
+      }
+      return { type, id: new mongoose.Types.ObjectId(id) };
+    });
+}
+
+const SORTS = {
+  due_asc: { due_date: 1, _id: 1 },
+  due_desc: { due_date: -1, _id: -1 },
+  title_asc: { title: 1, _id: 1 },
+  title_desc: { title: -1, _id: -1 },
+  broker_asc: { broker: 1, _id: 1 },
+  broker_desc: { broker: -1, _id: -1 },
+};
+
+// Validates the list query once and turns it into the filters every list/facet query is built from.
+// `statuses`, `assignees`, `creators` and `brokers` are the board's column filters (each a list; empty
+// means no filter on that column). `status` and `assigneeType` are the older single-value filters the
+// dashboards still use.
+function parseTaskQuery(query, actorId, actorRole) {
+  const { search, status, range, from, to, assigneeType, assigneeId, sort } = query;
+  const statuses = parseList(query.statuses).filter(Boolean);
+  if (status) statuses.push(status);
+  const invalidStatus = statuses.find((value) => !Object.values(TaskDisplayStatus).includes(value));
+  if (invalidStatus) {
     throw validationError(`"status" must be one of ${Object.values(TaskDisplayStatus).join(', ')}.`);
   }
 
@@ -288,78 +318,180 @@ async function getTasksForAdmin({
     throw validationError('"assigneeId" is not a valid id.');
   }
 
+  if (sort && !SORTS[sort]) {
+    throw validationError(`"sort" must be one of ${Object.keys(SORTS).join(', ')}.`);
+  }
+
   if (!range && (from || to)) {
     throw validationError('"from" and "to" can only be used with range=custom.');
   }
 
-  const dateRange = range ? resolveDueDateRange({ range, from, to }, env.appTimezone) : null;
+  return {
+    search: search ? String(search).trim() : '',
+    statuses: [...new Set(statuses)],
+    hasStatusFilter: query.statuses !== undefined || Boolean(status),
+    dateRange: range ? resolveDueDateRange({ range, from, to }, env.appTimezone) : null,
+    assigneeType,
+    assigneeId,
+    assignees: parsePeople(query.assignees, 'assignees'),
+    creators: parsePeople(query.creators, 'creators'),
+    brokers: query.brokers === undefined ? null : parseList(query.brokers),
+    sort,
+    actorId: new mongoose.Types.ObjectId(String(actorId)),
+    isAdmin: actorRole === Roles.ADMIN,
+  };
+}
 
+// Builds the Mongo filter for a parsed query. `omit` leaves one column filter out ('status', 'assignee',
+// 'creator', 'broker' or 'owner'), which is how each column's popover and each count gets its numbers:
+// they reflect every other active filter, but not their own.
+function buildTaskFilter(parsed, now, omit = null) {
+  const and = [{ deleted_at: null }];
+
+  if (parsed.search) {
+    const pattern = { $regex: escapeRegex(parsed.search), $options: 'i' };
+    and.push({ $or: [{ title: pattern }, { broker: pattern }] });
+  }
+
+  if (parsed.dateRange) {
+    and.push({ due_date: { $gte: parsed.dateRange.start, $lt: parsed.dateRange.end } });
+  }
+
+  if (parsed.assigneeId) {
+    and.push({ assignee_id: new mongoose.Types.ObjectId(String(parsed.assigneeId)) });
+  }
+
+  if (!parsed.isAdmin) {
+    // A staff caller sees the tasks assigned to them and the ones they created for someone else, and
+    // nothing else. Added unconditionally, so nothing in the query string can widen it.
+    and.push({
+      $or: [
+        { assignee_type: AssigneeType.STAFF, assignee_id: parsed.actorId },
+        { created_by_type: AssigneeType.STAFF, created_by: parsed.actorId },
+      ],
+    });
+  } else if (parsed.assigneeType && omit !== 'owner') {
+    // For an admin, assigneeType=admin means "assigned to me", not to any admin.
+    and.push(
+      parsed.assigneeType === AssigneeType.ADMIN
+        ? { assignee_type: AssigneeType.ADMIN, assignee_id: parsed.actorId }
+        : { assignee_type: AssigneeType.STAFF }
+    );
+  }
+
+  if (omit !== 'status') {
+    if (parsed.statuses.length > 0) {
+      and.push(anyOf(parsed.statuses.map((status) => displayStatusCondition(status, now))));
+    } else if (!parsed.hasStatusFilter && !parsed.dateRange) {
+      and.push(recentWindowCondition(now));
+    }
+  }
+
+  if (omit !== 'assignee' && parsed.assignees.length > 0) {
+    and.push(anyOf(parsed.assignees.map(({ type, id }) => ({ assignee_type: type, assignee_id: id }))));
+  }
+
+  if (omit !== 'creator' && parsed.creators.length > 0) {
+    and.push(anyOf(parsed.creators.map(({ type, id }) => ({ created_by_type: type, created_by: id }))));
+  }
+
+  if (omit !== 'broker' && parsed.brokers) {
+    const named = parsed.brokers.filter(Boolean);
+    const conditions = named.length > 0 ? [{ broker: { $in: named } }] : [];
+    if (parsed.brokers.includes('')) conditions.push({ broker: { $in: [null, ''] } });
+    // An empty selection matches nothing, like unticking every box in a spreadsheet filter.
+    and.push(conditions.length > 0 ? anyOf(conditions) : { _id: null });
+  }
+
+  return { $and: and };
+}
+
+async function getTasksForAdmin({ page, limit, skip, actorId, actorRole, ...query }) {
+  const parsed = parseTaskQuery(query, actorId, actorRole);
   const now = new Date();
-  const base = { deleted_at: null };
+  const listFilter = buildTaskFilter(parsed, now);
 
-  if (search) {
-    base.title = { $regex: escapeRegex(search), $options: 'i' };
-  }
-
-  if (dateRange) {
-    // In $and so it combines with the due_date condition the "delayed" status filter sets.
-    base.$and = [{ due_date: { $gte: dateRange.start, $lt: dateRange.end } }];
-  }
-
-  if (assigneeId) {
-    base.assignee_id = assigneeId;
-  }
-
-  // A staff caller only ever sees their own tasks — same isolation rule already applied to status updates
-  // and notes. Set last, so nothing in the query string can widen it. Admin is unrestricted (sees everyone's).
-  if (actorRole === Roles.STAFF) {
-    base.assignee_type = AssigneeType.STAFF;
-    base.assignee_id = actorId;
-  }
-
-  const isAdmin = actorRole === Roles.ADMIN;
-  // The "My tasks / Staff tasks" split is applied to the list and the per-status counts; the admin/staff
-  // counts below cover both sides so both tabs can show a number at once.
-  const ownerBase = isAdmin && assigneeType ? { ...base, assignee_type: assigneeType } : base;
-  const filter = withDisplayStatus(base, status, now, Boolean(dateRange));
-  const listFilter = withDisplayStatus(ownerBase, status, now, Boolean(dateRange));
-
-  // aggregate() doesn't cast like find() does, so the id fields are cast here.
-  const toMatch = (query) =>
-    query.assignee_id ? { ...query, assignee_id: new mongoose.Types.ObjectId(String(query.assignee_id)) } : query;
-
-  // Open tasks first (oldest due first, so delayed ones lead), completed ones last, most recent first.
-  // _id breaks ties between tasks due at the same minute, so paging through them is stable.
-  const isCompletedView = status === TaskDisplayStatus.COMPLETED || status === TaskDisplayStatus.COMPLETED_LATE;
-  const sort = isCompletedView ? { due_date: -1, _id: -1 } : { is_completed: 1, due_date: 1, _id: 1 };
+  // Default order: open tasks first (oldest due first, so delayed ones lead), completed ones last, most
+  // recent first. A completed-only view leads with the most recent. _id breaks ties so paging is stable.
+  const completedOnly =
+    parsed.statuses.length > 0 &&
+    parsed.statuses.every((status) => status === TaskDisplayStatus.COMPLETED || status === TaskDisplayStatus.COMPLETED_LATE);
+  let sort = completedOnly ? { due_date: -1, _id: -1 } : { is_completed: 1, due_date: 1, _id: 1 };
+  if (parsed.sort) sort = SORTS[parsed.sort];
 
   const displayStatuses = Object.values(TaskDisplayStatus);
-  const [tasks, total, adminCount, staffCount, ...statusTotals] = await Promise.all([
+  const ownerless = buildTaskFilter({ ...parsed, assigneeType: undefined }, now, 'status');
+  const [tasks, total, allCount, mineCount, staffCount, ...statusTotals] = await Promise.all([
     Task.aggregate([
-      { $match: toMatch(listFilter) },
+      { $match: listFilter },
       { $addFields: { is_completed: { $eq: ['$status', TaskStatus.COMPLETED] } } },
       { $sort: sort },
       { $skip: skip },
       { $limit: limit },
     ]),
     Task.countDocuments(listFilter),
-    isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.ADMIN }) : null,
-    isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.STAFF }) : null,
-    ...displayStatuses.map((s) => Task.countDocuments(withDisplayStatus(ownerBase, s, now, Boolean(dateRange)))),
+    // Owner counts ignore both the owner and the status filter, so each number stays put while you
+    // click around; every other filter still narrows them.
+    parsed.isAdmin ? Task.countDocuments(ownerless) : null,
+    parsed.isAdmin ? Task.countDocuments(buildTaskFilter({ ...parsed, assigneeType: AssigneeType.ADMIN }, now, 'status')) : null,
+    parsed.isAdmin ? Task.countDocuments(buildTaskFilter({ ...parsed, assigneeType: AssigneeType.STAFF }, now, 'status')) : null,
+    // How many tasks are in each display status under every other filter, so status tabs and the status
+    // column filter can all show a number at once. Given to every caller.
+    ...displayStatuses.map((status) =>
+      Task.countDocuments(buildTaskFilter({ ...parsed, statuses: [status] }, now))
+    ),
   ]);
 
-  // How many tasks are in each display status under the same search/range/assignee filters, ignoring
-  // `status` itself, so status tabs can all show a number at once. Given to every caller.
-  const byStatus = Object.fromEntries(displayStatuses.map((s, index) => [s, statusTotals[index]]));
-  const counts = isAdmin
-    ? { all: adminCount + staffCount, admin: adminCount, staff: staffCount, byStatus }
+  const byStatus = Object.fromEntries(displayStatuses.map((status, index) => [status, statusTotals[index]]));
+  const counts = parsed.isAdmin
+    ? { all: allCount, admin: mineCount, staff: staffCount, byStatus }
     : { byStatus };
 
   return {
-    tasks: await attachAssigneeNames(tasks),
+    tasks: await attachPeopleNames(tasks),
     pagination: buildPaginationMeta({ page, limit, total }),
-    range: dateRange && { range: dateRange.range, from: dateRange.from, to: dateRange.to },
+    range: parsed.dateRange && { range: parsed.dateRange.range, from: parsed.dateRange.from, to: parsed.dateRange.to },
     counts,
+  };
+}
+
+// The values each column filter can offer, with how many tasks have each, under every other active
+// filter (the spreadsheet-style "only show values that still match"). Takes the same query as the list.
+async function getTaskFacets({ actorId, actorRole, ...query }) {
+  const parsed = parseTaskQuery(query, actorId, actorRole);
+  const now = new Date();
+
+  const groupBy = (omit, key) =>
+    Task.aggregate([{ $match: buildTaskFilter(parsed, now, omit) }, { $group: { _id: key, count: { $sum: 1 } } }]);
+
+  const displayStatuses = Object.values(TaskDisplayStatus);
+  const [assigneeGroups, creatorGroups, brokerGroups, ...statusCounts] = await Promise.all([
+    groupBy('assignee', { type: '$assignee_type', id: '$assignee_id' }),
+    groupBy('creator', { type: '$created_by_type', id: '$created_by' }),
+    groupBy('broker', { $ifNull: ['$broker', ''] }),
+    ...displayStatuses.map((status) =>
+      Task.countDocuments(buildTaskFilter({ ...parsed, statuses: [status] }, now, null))
+    ),
+  ]);
+
+  const people = [...assigneeGroups, ...creatorGroups].map((group) => group._id);
+  const names = await resolvePeopleNames(people.map(({ type, id }) => ({ type, id })));
+  const toPerson = (group) => ({
+    value: `${group._id.type}:${group._id.id}`,
+    type: group._id.type,
+    id: group._id.id,
+    name: names.get(String(group._id.id)) || null,
+    count: group.count,
+  });
+  const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
+
+  return {
+    status: displayStatuses.map((status, index) => ({ value: status, count: statusCounts[index] })),
+    assignee: assigneeGroups.map(toPerson).sort(byName),
+    creator: creatorGroups.map(toPerson).sort(byName),
+    broker: brokerGroups
+      .map((group) => ({ value: group._id, count: group.count }))
+      .sort((a, b) => (a.value || '￿').localeCompare(b.value || '￿')),
   };
 }
 
@@ -370,25 +502,18 @@ async function getTaskById({ taskId, actorId, actorRole }) {
 
   const task = await Task.findOne({ _id: taskId, deleted_at: null });
 
-  // Same isolation rule as the list: a staff member never learns that someone else's task exists.
-  const isOwnStaffTask = task && task.assignee_type === AssigneeType.STAFF && String(task.assignee_id) === String(actorId);
+  // Same isolation rule as the list: a staff member sees the tasks assigned to them or created by them,
+  // and never learns that anyone else's task exists.
+  const isOwnStaffTask =
+    task &&
+    ((task.assignee_type === AssigneeType.STAFF && String(task.assignee_id) === String(actorId)) ||
+      (task.created_by_type === AssigneeType.STAFF && String(task.created_by) === String(actorId)));
 
   if (!task || (actorRole === Roles.STAFF && !isOwnStaffTask)) {
     throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
   }
 
-  const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
-  return formatTaskResponse(task, assigneeName);
-}
-
-async function getAssigneeName(assigneeType, assigneeId) {
-  if (assigneeType === AssigneeType.STAFF) {
-    const staff = await Staff.findById(assigneeId);
-    return staff ? `${staff.first_name} ${staff.last_name}` : null;
-  }
-
-  const admin = await Admin.findById(assigneeId);
-  return admin ? admin.name : null;
+  return (await attachPeopleNames([task]))[0];
 }
 
 async function updateTaskStatus({ taskId, status, actorId, actorRole }) {
@@ -424,8 +549,7 @@ async function updateTaskStatus({ taskId, status, actorId, actorRole }) {
     await TaskSeries.updateOne({ _id: task.series_id }, { $set: { completion_at: completionAt } });
   }
 
-  const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
-  return formatTaskResponse(task, assigneeName);
+  return (await attachPeopleNames([task]))[0];
 }
 
 function deleteUploadedFile(url) {
@@ -521,12 +645,13 @@ async function updateTask({ taskId, data, attachmentUrl }) {
     deleteUploadedFile(previousAttachmentUrl);
   }
 
-  return formatTaskResponse(task, assignee.name);
+  return (await attachPeopleNames([task]))[0];
 }
 
-// Deletes only this occurrence and ends the series (no more future occurrences), matching the
-// approved delete-scope decision. Past occurrences of the same series are history and are never
-// touched, so completed/delayed records stay visible for staff-wise reporting.
+// Deletes only this occurrence. Deleting the series' current (latest) occurrence also ends the series
+// (no more future occurrences), matching the approved delete-scope decision. Deleting an older occurrence
+// is just cleaning up history and leaves the series running; it used to end it, which made recurring
+// tasks silently stop. Other occurrences are never touched, so they stay visible for staff-wise reporting.
 async function deleteTask(taskId) {
   if (!mongoose.Types.ObjectId.isValid(taskId)) {
     throw new AppError('Task not found.', 404, ErrorCodes.NOT_FOUND);
@@ -541,19 +666,22 @@ async function deleteTask(taskId) {
   const now = new Date();
 
   if (task.series_id) {
-    await TaskSeries.updateOne({ _id: task.series_id, deleted_at: null }, { $set: { deleted_at: now } });
+    await TaskSeries.updateOne(
+      { _id: task.series_id, deleted_at: null, last_due_date: task.due_date },
+      { $set: { deleted_at: now } }
+    );
   }
 
   task.deleted_at = now;
   await task.save();
 
-  const assigneeName = await getAssigneeName(task.assignee_type, task.assignee_id);
-  return formatTaskResponse(task, assigneeName);
+  return (await attachPeopleNames([task]))[0];
 }
 
 module.exports = {
   createTask,
   getTasksForAdmin,
+  getTaskFacets,
   getTaskById,
   updateTask,
   updateTaskStatus,

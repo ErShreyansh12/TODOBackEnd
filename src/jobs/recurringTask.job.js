@@ -11,6 +11,8 @@ const { buildOccurrenceData } = require('../services/task.service');
 
 const SCHEDULE = '*/5 * * * *';
 const BATCH_SIZE = 100;
+// Caps how many missed occurrences one run backfills for a series (about six weeks of a daily task).
+const MAX_BACKFILL = 30;
 
 let isRunning = false;
 
@@ -28,36 +30,55 @@ async function processSeries(series, now) {
     return;
   }
 
-  const next = nextOccurrence({
+  const schedule = {
     timeline: series.timeline,
     timeOfDay: series.time_of_day,
     timezone: series.timezone,
     customDates: series.custom_dates,
     monthlyDay: series.monthly_day,
-    after: now,
-  });
+  };
 
-  if (!next) {
+  // Walk forward from the last occurrence, not from `now`: if the server was down (a deploy, a crash) the
+  // occurrences it missed are still created, and show as delayed, instead of silently disappearing.
+  // The walk stops at the first occurrence in the future, which becomes the open task.
+  const dueDates = [];
+  let cursor = series.last_due_date;
+  while (dueDates.length < MAX_BACKFILL) {
+    const next = nextOccurrence({ ...schedule, after: cursor });
+    if (!next) break;
+    dueDates.push(next);
+    if (next > now) break;
+    cursor = next;
+  }
+
+  if (dueDates.length === 0) {
     series.ended_at = now;
     await series.save();
     logger.info(`Recurring task series ${series._id} ended: no more occurrences`);
     return;
   }
 
-  try {
-    await Task.create(buildOccurrenceData(series, next, TaskStatus.TODO));
-  } catch (err) {
-    // The unique (series_id, due_date) index means another run already created it - that's fine.
-    if (err.code !== 11000) {
-      throw err;
+  for (const dueDate of dueDates) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await Task.create(buildOccurrenceData(series, dueDate, TaskStatus.TODO));
+    } catch (err) {
+      // The unique (series_id, due_date) index means another run already created it - that's fine.
+      if (err.code !== 11000) {
+        throw err;
+      }
     }
   }
 
-  // If we crash between the two writes, the next run recomputes the same date, hits the unique index above, and catches up.
+  if (dueDates.length > 1) {
+    logger.info(`Recurring task series ${series._id}: backfilled ${dueDates.length - 1} missed occurrence(s)`);
+  }
+
+  // If we crash between the writes, the next run walks the same dates, hits the unique index above, and catches up.
   // completion_at is reset here too: it mirrors the newly-created (uncompleted) occurrence, not the one it replaced.
   await TaskSeries.updateOne(
     { _id: series._id, last_due_date: series.last_due_date },
-    { $set: { last_due_date: next, completion_at: null } }
+    { $set: { last_due_date: dueDates[dueDates.length - 1], completion_at: null } }
   );
 }
 

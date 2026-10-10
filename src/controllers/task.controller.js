@@ -31,7 +31,8 @@ async function createTask(req, res, next) {
 
 async function getAdminTasks(req, res, next) {
   try {
-    const { search, status, range, from, to, assigneeType, assigneeId } = req.query;
+    const { search, status, range, from, to, assigneeType, assigneeId, statuses, assignees, creators, brokers, sort } =
+      req.query;
     const { page, limit, skip } = parsePagination(req.query);
     const { tasks, pagination, range: appliedRange, counts } = await taskService.getTasksForAdmin({
       search,
@@ -41,6 +42,11 @@ async function getAdminTasks(req, res, next) {
       to,
       assigneeType,
       assigneeId,
+      statuses,
+      assignees,
+      creators,
+      brokers,
+      sort,
       page,
       limit,
       skip,
@@ -131,4 +137,29 @@ async function deleteTask(req, res, next) {
   }
 }
 
-module.exports = { createTask, getAdminTasks, getTask, updateTask, updateTaskStatus, deleteTask };
+async function getTaskFacets(req, res, next) {
+  try {
+    const { search, status, range, from, to, assigneeType, assigneeId, statuses, assignees, creators, brokers } = req.query;
+    const facets = await taskService.getTaskFacets({
+      search,
+      status,
+      range,
+      from,
+      to,
+      assigneeType,
+      assigneeId,
+      statuses,
+      assignees,
+      creators,
+      brokers,
+      actorId: req.user.id,
+      actorRole: req.user.role,
+    });
+
+    return sendSuccess(res, { statusCode: 200, message: 'Task filter values fetched successfully.', data: facets });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { createTask, getAdminTasks, getTaskFacets, getTask, updateTask, updateTaskStatus, deleteTask };

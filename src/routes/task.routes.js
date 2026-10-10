@@ -19,8 +19,8 @@ const router = express.Router();
  *     summary: Create a task
  *     description: |
  *       Creates a task and assigns it to a staff member or an admin. Admin can assign to anyone. A staff
- *       caller can only create a task assigned to themselves (assigneeType must be "staff" and assigneeId
- *       must be their own id) - attempting to assign to someone else returns a 422, not a silent override.
+ *       caller can assign to themselves or to another active staff member (assigneeType must be "staff");
+ *       assigning to an admin returns a 422, not a silent override.
  *
  *       The task repeats according to its timeline: the first deadline is stored now, and a background job
  *       creates each following occurrence automatically after the previous deadline passes, until the task
@@ -120,8 +120,9 @@ router.post(
  *       Results are paged with `page` and `limit` (max 100). The response has `counts.byStatus`
  *       ({ todo, delayed, completed, completed_late }): how many tasks match the search/date range/assignee
  *       filters in each display status, ignoring `status`, so status tabs can all show a number at once.
- *       For an admin caller `counts` also has { all, admin, staff }: how many tasks match the
- *       search/status/date range/assigneeId filters on each side, ignoring `assigneeType`.
+ *       For an admin caller `counts` also has { all, admin, staff }: all tasks, tasks assigned to the
+ *       calling admin, and staff tasks, under the search/date range/assigneeId filters. They ignore both
+ *       `status` and `assigneeType`, so they don't change as the caller switches tabs.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -148,23 +149,49 @@ router.post(
  *         schema:
  *           type: string
  *           enum: [admin, staff]
- *         description: Admin only - limit the list to tasks assigned to an admin ("My tasks") or to staff. Ignored for a staff caller.
+ *         description: Admin only - limit the list to tasks assigned to the calling admin ("My tasks") or to staff. Ignored for a staff caller.
  *       - in: query
  *         name: assigneeId
  *         schema:
  *           type: string
- *         description: Limit the list to one assignee. Ignored for a staff caller, who only ever sees their own tasks.
+ *         description: Limit the list to one assignee. A staff caller only ever sees tasks assigned to or created by them.
  *       - in: query
  *         name: search
  *         schema:
  *           type: string
- *         description: Case-insensitive partial match on the task title.
+ *         description: Case-insensitive partial match on the task title or broker.
  *       - in: query
  *         name: status
  *         schema:
  *           type: string
  *           enum: [todo, delayed, completed, completed_late]
  *         description: Omit for the default working-window view.
+ *       - in: query
+ *         name: statuses
+ *         schema:
+ *           type: string
+ *         description: Comma-separated display statuses (task board column filter). Present, even empty, turns off the default working window.
+ *       - in: query
+ *         name: assignees
+ *         schema:
+ *           type: string
+ *         description: Comma-separated "<type>:<id>" people the task is assigned to, e.g. admin:665f...,staff:6660...
+ *       - in: query
+ *         name: creators
+ *         schema:
+ *           type: string
+ *         description: Comma-separated "<type>:<id>" people who created the task.
+ *       - in: query
+ *         name: brokers
+ *         schema:
+ *           type: string
+ *         description: Comma-separated broker names; an empty entry means "no broker". Present but empty matches nothing.
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *           type: string
+ *           enum: [due_asc, due_desc, title_asc, title_desc, broker_asc, broker_desc]
+ *         description: Omit for the default order (open tasks first by due date, then completed).
  *       - in: query
  *         name: page
  *         schema:
@@ -205,6 +232,39 @@ router.post(
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskController.getAdminTasks);
+
+/**
+ * @openapi
+ * /tasks/facets:
+ *   get:
+ *     tags:
+ *       - Tasks
+ *     summary: Values for the task board's column filters
+ *     description: |
+ *       Takes the same filters as GET /tasks (no paging or sort) and returns, for each filterable column,
+ *       the values present and how many tasks have each. Each column's values reflect every other active
+ *       filter but not its own, like a spreadsheet filter. People are { value: "<type>:<id>", type, id,
+ *       name, count }; a broker value of "" means tasks with no broker. A staff caller only ever sees
+ *       values from tasks assigned to or created by them.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "data is { status: [{ value, count }], assignee: [person], creator: [person], broker: [{ value, count }] }."
+ *       401:
+ *         description: Authentication token missing, invalid, expired, or logged out.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Same validation errors as GET /tasks.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.get('/facets', authenticate, requireRole(Roles.ADMIN, Roles.STAFF), taskController.getTaskFacets);
 
 /**
  * @openapi
@@ -437,9 +497,9 @@ router.put(
  *       - Tasks
  *     summary: Delete a task (admin only, soft delete)
  *     description: |
- *       Marks this occurrence as deleted (sets deletedAt) and ends the series so the recurring job never
- *       creates another occurrence from it. Already-generated past occurrences (completed/delayed history)
- *       are left untouched and stay visible in the task list — only this occurrence and future ones are gone.
+ *       Marks this occurrence as deleted (sets deletedAt). If it is the series' current (latest) occurrence,
+ *       the series ends too, so the recurring job never creates another occurrence from it. Deleting an older
+ *       occurrence leaves the series running. Other occurrences are left untouched and stay visible.
  *       Nothing is removed from the database.
  *     security:
  *       - bearerAuth: []

@@ -111,4 +111,13 @@ async function resetStaffPassword(req, res, next) {
   }
 }
 
-module.exports = { createStaff, getStaff, deleteStaff, updateStaff, updateStaffStatus, resetStaffPassword };
+async function getStaffOptions(req, res, next) {
+  try {
+    const staff = await staffService.getStaffOptions();
+    return sendSuccess(res, { statusCode: 200, message: 'Staff options fetched successfully.', data: staff });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { createStaff, getStaff, getStaffOptions, deleteStaff, updateStaff, updateStaffStatus, resetStaffPassword };

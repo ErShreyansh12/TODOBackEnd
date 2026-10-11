@@ -27,6 +27,11 @@ const {
 
 const RECENT_COMPLETED_WINDOW_DAYS = 7;
 
+// The order task lists come back in: every To Do task, then every In Progress task, then every Completed
+// task. This is the stored status, so an overdue (delayed) task stays in its To Do / In Progress group -
+// it sorts first there, being the oldest due date.
+const STATUS_LIST_ORDER = [TaskStatus.TODO, TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED];
+
 function validationError(message) {
   return new AppError(message, 422, ErrorCodes.VALIDATION_ERROR);
 }
@@ -289,23 +294,31 @@ async function getTasksForAdmin({
   }
 
   if (assigneeId) {
-    filter.assignee_id = assigneeId;
+    filter.assignee_id = new mongoose.Types.ObjectId(assigneeId);
   }
 
   // A staff caller only ever sees their own tasks — same isolation rule already applied to status updates
   // and notes. Set last, so nothing in the query string can widen it. Admin is unrestricted (sees everyone's).
   if (actorRole === Roles.STAFF) {
     filter.assignee_type = AssigneeType.STAFF;
-    filter.assignee_id = actorId;
+    filter.assignee_id = new mongoose.Types.ObjectId(String(actorId));
   }
 
   // The "My tasks / Staff tasks" split is applied to the list only: the counts below cover both sides.
   const listFilter = actorRole === Roles.ADMIN && assigneeType ? { ...filter, assignee_type: assigneeType } : filter;
 
   const isAdmin = actorRole === Roles.ADMIN;
-  // _id breaks ties between tasks due at the same minute, so paging through them is stable.
+  // Status group first, then earliest due date within it. _id breaks ties between tasks due at the same
+  // minute, so paging through them is stable. An aggregation is used (not find().sort()) so the group
+  // order is written down explicitly instead of depending on how the status strings happen to sort.
   const [tasks, total, adminCount, staffCount] = await Promise.all([
-    Task.find(listFilter).sort({ due_date: 1, _id: 1 }).skip(skip).limit(limit),
+    Task.aggregate([
+      { $match: listFilter },
+      { $addFields: { status_rank: { $indexOfArray: [STATUS_LIST_ORDER, '$status'] } } },
+      { $sort: { status_rank: 1, due_date: 1, _id: 1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]),
     Task.countDocuments(listFilter),
     isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.ADMIN }) : null,
     isAdmin ? Task.countDocuments({ ...filter, assignee_type: AssigneeType.STAFF }) : null,

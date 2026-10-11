@@ -163,6 +163,43 @@ const options = {
             deletedAt: { type: 'string', format: 'date-time', nullable: true, example: null },
           },
         },
+        MeetingRecord: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', example: '6aae1234ab56cd78ef901234' },
+            title: { type: 'string', example: 'Sprint Planning' },
+            date: { type: 'string', example: '2026-10-14', description: 'Meeting date in Asia/Kolkata' },
+            startTime: { type: 'string', example: '10:00', description: '24-hour HH:mm in Asia/Kolkata' },
+            endTime: { type: 'string', example: '11:00', description: '24-hour HH:mm in Asia/Kolkata' },
+            location: { type: 'string', example: 'Conference Room A' },
+            description: { type: 'string', nullable: true },
+            isEditable: {
+              type: 'boolean',
+              example: true,
+              description: 'False once less than 15 minutes remain before the meeting starts (or it has started)',
+            },
+            editableUntil: {
+              type: 'string',
+              format: 'date-time',
+              description: 'Last moment the meeting can be edited: 15 minutes before it starts, as a UTC timestamp',
+            },
+            endsAt: {
+              type: 'string',
+              format: 'date-time',
+              description: 'The moment the meeting ends, as a UTC timestamp. It can be deleted again from this moment',
+            },
+            isDeletable: {
+              type: 'boolean',
+              example: true,
+              description:
+                'True until 15 minutes before the meeting starts, and again once it has ended; false in between',
+            },
+            createdBy: { type: 'string', example: '6aa4036fac73e628c27d3554', description: 'The admin who scheduled it' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            deletedAt: { type: 'string', format: 'date-time', nullable: true, example: null },
+          },
+        },
         PaginationMeta: {
           type: 'object',
           properties: {

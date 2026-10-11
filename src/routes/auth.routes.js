@@ -2,7 +2,7 @@ const express = require('express');
 const authController = require('../controllers/auth.controller');
 const authenticate = require('../middlewares/auth.middleware');
 const validate = require('../middlewares/validate.middleware');
-const { loginSchema, staffLoginSchema } = require('../validators/auth.validator');
+const { loginSchema, staffLoginSchema, changePasswordSchema } = require('../validators/auth.validator');
 
 const router = express.Router();
 
@@ -168,5 +168,93 @@ router.post('/staff-login', validate(staffLoginSchema), authController.staffLogi
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/logout', authenticate, authController.logout);
+
+/**
+ * @openapi
+ * /auth/change-password:
+ *   patch:
+ *     tags:
+ *       - Auth
+ *     summary: Change my password (staff or admin)
+ *     description: |
+ *       Changes the password of the signed-in user - whoever the token belongs to. There is no user id in
+ *       the request, so nobody can change another account's password with this.
+ *
+ *       The current password must be supplied and correct. The new password must be at least 6 characters
+ *       and different from the current one. `confirmPassword` is optional; if sent it must equal
+ *       `newPassword`.
+ *
+ *       A wrong current password returns 422 (not 401), so a typo doesn't look like an expired session.
+ *
+ *       Changing the password signs the account out everywhere else: every other token issued before the
+ *       change (other devices, other browsers) is rejected with 401 "Your password was changed. Please login
+ *       again." The token that made this request is also older than the change, so the response returns a
+ *       fresh `token` - the client must replace its stored token with it to stay signed in. A token
+ *       issued in the same second as the change is not affected.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - currentPassword
+ *               - newPassword
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *                 example: "123456"
+ *               newPassword:
+ *                 type: string
+ *                 minLength: 6
+ *                 maxLength: 128
+ *                 example: "Better#2026"
+ *               confirmPassword:
+ *                 type: string
+ *                 example: "Better#2026"
+ *     responses:
+ *       200:
+ *         description: Password changed successfully. data.token is the new token to use from now on.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         token:
+ *                           type: string
+ *                           description: Fresh JWT (valid 24 hours) replacing the one used for this request.
+ *       401:
+ *         description: Token missing, invalid, expired, logged out or issued before the last password change - or the account no longer exists.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: The staff account is inactive.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       409:
+ *         description: The password was changed by another request at the same moment. Try again.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation error - missing field, new password too short or the same as the current one, confirmPassword not matching, or the current password is wrong.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch('/change-password', authenticate, validate(changePasswordSchema), authController.changePassword);
 
 module.exports = router;

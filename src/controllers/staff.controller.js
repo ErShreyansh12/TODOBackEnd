@@ -1,4 +1,5 @@
 const staffService = require('../services/staff.service');
+const Defaults = require('../constants/defaults');
 const { sendSuccess } = require('../utils/response');
 const { parsePagination } = require('../utils/pagination');
 
@@ -98,4 +99,21 @@ async function updateStaffStatus(req, res, next) {
   }
 }
 
-module.exports = { createStaff, getStaff, deleteStaff, updateStaff, updateStaffStatus };
+async function resetStaffPassword(req, res, next) {
+  try {
+    const { staffId } = req.params;
+    const staff = await staffService.resetStaffPassword(staffId);
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Password reset successfully. The staff member can now log in with the default password.',
+      // Admin-only response. Sent so the admin can be told (and can tell the staff member) what it is, and so
+      // a client never has to hard-code the value.
+      data: { staff, defaultPassword: Defaults.DEFAULT_STAFF_PASSWORD },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { createStaff, getStaff, deleteStaff, updateStaff, updateStaffStatus, resetStaffPassword };

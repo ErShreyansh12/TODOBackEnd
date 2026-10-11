@@ -1,5 +1,8 @@
 const { verifyToken, hashToken } = require('../utils/jwt');
 const RevokedToken = require('../models/RevokedToken');
+const Admin = require('../models/Admin');
+const Staff = require('../models/Staff');
+const Roles = require('../constants/roles');
 const AppError = require('../utils/AppError');
 const ErrorCodes = require('../constants/errorCodes');
 
@@ -25,12 +28,30 @@ async function authenticate(req, res, next) {
   }
 
   try {
-    const isRevoked = await RevokedToken.exists({ token_hash: hashToken(token) });
+    const Model = payload.role === Roles.ADMIN ? Admin : Staff;
+
+    const [isRevoked, account] = await Promise.all([
+      RevokedToken.exists({ token_hash: hashToken(token) }),
+      Model.findById(payload.id).select('password_reset_at').lean(),
+    ]);
 
     if (isRevoked) {
       return next(
         new AppError('You have been logged out. Please login again.', 401, ErrorCodes.TOKEN_REVOKED)
       );
+    }
+
+    // A password change signs the account out everywhere except the device that made the change (that one
+    // is handed a fresh token). Compared in whole seconds because a token's `iat` has no finer resolution.
+    // A missing account is left to the routes to deal with, as before.
+    if (account?.password_reset_at) {
+      const changedAtSeconds = Math.floor(account.password_reset_at.getTime() / 1000);
+
+      if (payload.iat < changedAtSeconds) {
+        return next(
+          new AppError('Your password was changed. Please login again.', 401, ErrorCodes.TOKEN_REVOKED)
+        );
+      }
     }
   } catch (err) {
     return next(err);

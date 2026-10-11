@@ -418,4 +418,81 @@ router.patch(
   staffController.updateStaffStatus
 );
 
+/**
+ * @openapi
+ * /staff/{staffId}/reset-password:
+ *   patch:
+ *     tags:
+ *       - Staff
+ *     summary: Reset a staff member's password to the default (admin only)
+ *     description: |
+ *       For a staff member who has forgotten their password. Sets it back to the default password ("123456")
+ *       - the same one a new staff member starts with. No request body.
+ *
+ *       Every session the staff member already has is signed out: any token issued before the reset is
+ *       rejected with 401 "Your password was changed. Please login again."
+ *
+ *       An inactive staff member can't be reset - they must be reactivated first (409). A deleted or
+ *       unknown staff member returns 404. The response carries `defaultPassword` so the admin can pass it
+ *       on. The staff member can change it afterwards with PATCH /auth/change-password.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: staffId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: EMP-001
+ *     responses:
+ *       200:
+ *         description: Password reset successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         staff:
+ *                           $ref: '#/components/schemas/StaffRecord'
+ *                         defaultPassword:
+ *                           type: string
+ *                           example: "123456"
+ *                           description: The password the staff member now has, to pass on to them.
+ *       401:
+ *         description: Authentication token missing, invalid, expired, or logged out.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Logged-in user is not an admin.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: Staff member not found or deleted.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       409:
+ *         description: The staff member is inactive. Reactivate them before resetting the password.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch(
+  '/:staffId/reset-password',
+  authenticate,
+  requireRole(Roles.ADMIN),
+  staffController.resetStaffPassword
+);
+
 module.exports = router;

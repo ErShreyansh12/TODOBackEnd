@@ -113,6 +113,10 @@ router.post(
  *       - `this_week` / `last_week`: Monday to Sunday of the current / previous week.
  *       - `custom`: `from` and `to` are required (inclusive); at most 30 days.
  *
+ *       Order: all To Do tasks first, then all In Progress tasks, then all Completed tasks, and within each
+ *       group the earliest due date first (an overdue task keeps its To Do / In Progress group, at the top of it).
+ *       The order runs across pages, so page 1 starts with To Do and the last page ends with Completed.
+ *
  *       Results are paged with `page` and `limit` (max 100). For an admin caller the response also has `counts`
  *       ({ all, admin, staff }): how many tasks match the search/status/date range/assigneeId filters on each
  *       side, ignoring `assigneeType` so the "My tasks / Staff tasks" tabs can show both numbers at once.

@@ -19,6 +19,11 @@ const adminSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
+    // Set whenever the password changes. Tokens issued before this moment stop working (see auth.middleware).
+    password_reset_at: {
+      type: Date,
+      default: null,
+    },
     deleted_at: {
       type: Date,
       default: null,

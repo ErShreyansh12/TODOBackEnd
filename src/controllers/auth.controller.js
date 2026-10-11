@@ -45,4 +45,24 @@ async function logout(req, res, next) {
   }
 }
 
-module.exports = { login, staffLogin, logout };
+async function changePassword(req, res, next) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const { token } = await authService.changePassword({
+      userId: req.user.id,
+      role: req.user.role,
+      currentPassword,
+      newPassword,
+    });
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Password changed successfully.',
+      data: { token },
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { login, staffLogin, logout, changePassword };

@@ -158,6 +158,36 @@ async function updateStaffStatus(staffId, status) {
   return formatStaffResponse(staff);
 }
 
+// Puts a staff member's password back to the default one, for when they have forgotten theirs. Passwords
+// are plain text by explicit project decision, so this is a straight overwrite.
+async function resetStaffPassword(staffId) {
+  const staff = await Staff.findOne({ employee_code: staffId, deleted_at: null });
+
+  if (!staff) {
+    throw new AppError('Staff member not found.', 404, ErrorCodes.NOT_FOUND);
+  }
+
+  // An inactive account is left alone: it has to be reactivated first. (The admin UI greys the button out
+  // for inactive staff; this is the server-side guarantee behind it.)
+  if (staff.status !== StaffStatus.ACTIVE) {
+    throw new AppError(
+      "An inactive staff member's password can't be reset. Reactivate them first.",
+      409,
+      ErrorCodes.CONFLICT
+    );
+  }
+
+  // password_reset_at is what signs a staff member out of every session they already have: authenticate
+  // rejects any token issued before it. timestamps:false keeps updated_at meaning "profile was edited".
+  await Staff.updateOne(
+    { _id: staff._id },
+    { $set: { password: Defaults.DEFAULT_STAFF_PASSWORD, password_reset_at: new Date() } },
+    { timestamps: false }
+  );
+
+  return formatStaffResponse(staff);
+}
+
 module.exports = {
   formatStaffResponse,
   createStaff,
@@ -166,4 +196,5 @@ module.exports = {
   deleteStaff,
   updateStaff,
   updateStaffStatus,
+  resetStaffPassword,
 };
